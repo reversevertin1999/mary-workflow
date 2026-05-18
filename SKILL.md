@@ -26,14 +26,16 @@ python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py <command>
 1. Before any command, work from the user's current project directory.
 2. If `.mary-workflow/` is missing, run `/mw:init` when the user asked to initialize; otherwise tell the user to run `/mw:init`.
 3. For state-only operations, use `scripts/mary_workflow.py`.
-4. The core phase prompts are:
+4. Prompts may be bilingual: keep the English `Agent Protocol` as the execution contract and use Chinese `中文说明` sections for human explanation.
+5. Machine-facing names stay in English: command names, file names, YAML keys, task ids, and phase values.
+6. The core phase prompts are:
 
    - `PLANNING`: `.mary-workflow/prompts/mw-plan.md`
    - `EXECUTING`: `.mary-workflow/prompts/mw-execute.md`
    - `REVIEWING`: `.mary-workflow/prompts/mw-review.md`
 
-5. Append important user-visible events to `.mary-workflow/log.md`.
-6. User-facing output should follow the user's conversation language.
+7. Append important user-visible events to `.mary-workflow/log.md`.
+8. User-facing output should follow the user's conversation language.
 
 ## Prompt Execution
 
