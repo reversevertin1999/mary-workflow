@@ -181,3 +181,34 @@ Third step: Codex plugin bridge.
 - `scripts/mw_codex.py` Python 语法检查通过。
 - 运行 skill 验证，结果为 `Skill is valid!`。
 - 冒烟测试覆盖 `/mw-plan`、`/mw-run`、`/mw-review`、`/mw-next`、`/mw-status` 的 prompt/context 解析。
+
+## 2026-05-19 20:00:56 +08:00
+
+Fourth step: self-healing debug loop.
+
+完成内容：
+
+- 新增 `DEBUGGING` phase。
+- 新增 `.mary-workflow/prompts/mw-debug.md`。
+- 在 `state.yaml` 中支持 `last_error` 区块，用于记录失败命令、stderr、return code 和时间。
+- 在 `scripts/mary_workflow.py` 中新增：
+  - `record_error(...)`
+  - `enqueue_fix_task(...)`
+  - `record-error` CLI
+  - `record_error` action
+  - `enqueue_fix_task` action
+- `enqueue_fix_task` 会把修复任务插到第一个 pending 任务前面，然后回到 `EXECUTING`。
+- 更新 `scripts/mw_codex.py`，支持 `/mw-debug`，并让 `/mw-next` 在 `DEBUGGING` 阶段加载 `mw-debug.md`。
+- 更新 `SKILL.md` 和 `references/state-contract.md`，记录 debug phase、debug alias 和 debug actions。
+
+验证：
+
+- `scripts/mary_workflow.py` 和 `scripts/mw_codex.py` Python 语法检查通过。
+- `plugin.json` JSON 校验通过。
+- 运行 skill 验证，结果为 `Skill is valid!`。
+- 冒烟测试确认：
+  - 失败命令可以通过 `record-error` 进入 `DEBUGGING`。
+  - `/mw-next` 在 `DEBUGGING` 阶段加载 `mw-debug.md`。
+  - `enqueue_fix_task` 会创建修复任务。
+  - 修复任务会优先于原 pending 任务执行。
+  - workflow 会从 `DEBUGGING` 回到 `EXECUTING`。

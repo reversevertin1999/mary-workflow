@@ -1,11 +1,11 @@
 ---
 name: mary-workflow
-description: Run a minimal project-local prompt workflow from `.mary-workflow/`. Use when the user invokes `/mw:init`, `/mw:start`, `/mw:next`, `/mw:resume`, `/mw:status`, `/mw:stop`, `/mw-plan`, `/mw-run`, `/mw-review`, or asks to run Mary workflow.
+description: Run a minimal project-local prompt workflow from `.mary-workflow/`. Use when the user invokes `/mw:init`, `/mw:start`, `/mw:next`, `/mw:resume`, `/mw:status`, `/mw:stop`, `/mw-plan`, `/mw-run`, `/mw-review`, `/mw-debug`, or asks to run Mary workflow.
 ---
 
 # Mary Workflow
 
-Mary Workflow is a small three-phase workflow. It keeps project-local state in `.mary-workflow/` and drives the agent through `PLANNING`, `EXECUTING`, and `REVIEWING` phases.
+Mary Workflow is a small workflow. It keeps project-local state in `.mary-workflow/` and drives the agent through `PLANNING`, `EXECUTING`, `REVIEWING`, and `DEBUGGING` phases.
 
 ## Commands
 
@@ -23,6 +23,7 @@ python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py <command>
 - `/mw-plan`: load `mw-plan.md` as the current Codex instruction context.
 - `/mw-run`: load `mw-execute.md` as the current Codex instruction context.
 - `/mw-review`: load `mw-review.md` as the current Codex instruction context.
+- `/mw-debug`: load `mw-debug.md` as the current Codex instruction context.
 - `/mw-next`: load the prompt matching `workflow.phase`.
 - `/mw-status`: render current Mary Workflow state for Codex context.
 
@@ -41,6 +42,7 @@ python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py <command>
    - `PLANNING`: `.mary-workflow/prompts/mw-plan.md`
    - `EXECUTING`: `.mary-workflow/prompts/mw-execute.md`
    - `REVIEWING`: `.mary-workflow/prompts/mw-review.md`
+   - `DEBUGGING`: `.mary-workflow/prompts/mw-debug.md`
 
 10. Append important user-visible events to `.mary-workflow/log.md`.
 11. User-facing output should follow the user's conversation language.
@@ -49,7 +51,7 @@ python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py <command>
 
 The Codex plugin manifest lives at `.codex-plugin/plugin.json`. It exposes Mary Workflow metadata and this skill to Codex. The manifest schema does not define native slash-command routing, so slash aliases are handled by this skill plus `scripts/mw_codex.py`.
 
-When the user invokes `/mw-plan`, `/mw-run`, `/mw-review`, `/mw-next`, or `/mw-status`:
+When the user invokes `/mw-plan`, `/mw-run`, `/mw-review`, `/mw-debug`, `/mw-next`, or `/mw-status`:
 
 1. Run the bridge from the project root:
 
@@ -57,7 +59,7 @@ When the user invokes `/mw-plan`, `/mw-run`, `/mw-review`, `/mw-next`, or `/mw-s
    python ~/.codex/skills/mary-workflow/scripts/mw_codex.py mw-plan
    ```
 
-   Replace `mw-plan` with `mw-run`, `mw-review`, `mw-next`, or `mw-status` as needed.
+   Replace `mw-plan` with `mw-run`, `mw-review`, `mw-debug`, `mw-next`, or `mw-status` as needed.
 
 2. Treat the bridge output as the active phase instruction context for this turn.
 3. For `/mw-status`, report the rendered state without mutating it.
@@ -69,6 +71,7 @@ Alias mapping:
 - `/mw-plan` -> `PLANNING` -> `.mary-workflow/prompts/mw-plan.md`
 - `/mw-run` -> `EXECUTING` -> `.mary-workflow/prompts/mw-execute.md`
 - `/mw-review` -> `REVIEWING` -> `.mary-workflow/prompts/mw-review.md`
+- `/mw-debug` -> `DEBUGGING` -> `.mary-workflow/prompts/mw-debug.md`
 - `/mw-next` -> current `workflow.phase` -> matching prompt
 - `/mw-status` -> current `workflow.phase` -> state context only
 
@@ -103,6 +106,13 @@ When executing a prompt:
 
   ```bash
   python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py apply-action --json '{"action":"set_phase","data":{"phase":"FINISHED","decision":"finished","findings":[],"validation":[]}}'
+  ```
+
+- Debug turns stderr into a fix task:
+
+  ```bash
+  python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py record-error --command "pytest" --stderr "failure summary" --returncode 1
+  python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py apply-action --json '{"action":"enqueue_fix_task","data":{"title":"Fix pytest failure","source_error":"failure summary"}}'
   ```
 
 ## File Contract

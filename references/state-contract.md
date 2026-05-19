@@ -11,7 +11,8 @@ Mary Workflow stores project-local runtime files in `.mary-workflow/`.
 ├── prompts/
 │   ├── mw-plan.md
 │   ├── mw-execute.md
-│   └── mw-review.md
+│   ├── mw-review.md
+│   └── mw-debug.md
 └── log.md
 ```
 
@@ -37,6 +38,12 @@ tasks:
   - id: task-1
     status: pending
     title: "Implement the smallest useful change"
+
+last_error:
+  command: "pytest"
+  stderr: "failure summary"
+  returncode: "1"
+  created_at: 2026-05-19T00:00:00+00:00
 ```
 
 Status values:
@@ -51,6 +58,7 @@ Phase values:
 - `PLANNING`: convert the user's request into at most 3 concrete tasks.
 - `EXECUTING`: implement the first pending task.
 - `REVIEWING`: inspect the generated code and decide whether to continue.
+- `DEBUGGING`: turn a command or script failure into a focused fix task.
 - `FINISHED`: the user's request is complete.
 
 Use `REVIEWING` exactly. Do not shorten this phase to `REVIEW`.
@@ -68,6 +76,7 @@ Core prompt files live in `.mary-workflow/prompts/`:
 mw-plan.md
 mw-execute.md
 mw-review.md
+mw-debug.md
 ```
 
 Additional `.md` prompts may be added later, but the MVP phase loop uses these three names directly.
@@ -79,6 +88,7 @@ Mary Workflow exposes Codex-facing slash aliases through `scripts/mw_codex.py` a
 - `/mw-plan`: render `mw-plan.md`.
 - `/mw-run`: render `mw-execute.md`.
 - `/mw-review`: render `mw-review.md`.
+- `/mw-debug`: render `mw-debug.md`.
 - `/mw-next`: render the prompt for the current `workflow.phase`.
 - `/mw-status`: render `state.yaml` without a phase prompt.
 
@@ -97,4 +107,6 @@ Supported action names:
 
 - `update_state`: replace the task list and move to the target phase.
 - `mark_task_done`: mark one task done and advance to the next task or `REVIEWING`.
-- `set_phase`: move to `PLANNING`, `EXECUTING`, `REVIEWING`, or `FINISHED`.
+- `set_phase`: move to `PLANNING`, `EXECUTING`, `REVIEWING`, `DEBUGGING`, or `FINISHED`.
+- `record_error`: record failed command details and enter `DEBUGGING`.
+- `enqueue_fix_task`: insert one fix task before the first pending task and return to `EXECUTING`.

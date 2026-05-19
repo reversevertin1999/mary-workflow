@@ -18,11 +18,13 @@ PHASE_TO_PROMPT = {
     "PLANNING": "mw-plan.md",
     "EXECUTING": "mw-execute.md",
     "REVIEWING": "mw-review.md",
+    "DEBUGGING": "mw-debug.md",
 }
 ALIAS_TO_PHASE = {
     "mw-plan": "PLANNING",
     "mw-run": "EXECUTING",
     "mw-review": "REVIEWING",
+    "mw-debug": "DEBUGGING",
 }
 
 
@@ -92,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Resolve Mary Workflow slash aliases for Codex")
     parser.add_argument(
         "alias",
-        choices=["mw-plan", "mw-run", "mw-review", "mw-next", "mw-status"],
+        choices=["mw-plan", "mw-run", "mw-review", "mw-debug", "mw-next", "mw-status"],
         help="Slash alias without the leading slash",
     )
     parser.add_argument(

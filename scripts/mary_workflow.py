@@ -18,16 +18,18 @@ import sys
 
 WORKFLOW_DIR = ".mary-workflow"
 PROMPTS_DIR = "prompts"
-VALID_PHASES = {"PLANNING", "EXECUTING", "REVIEWING", "FINISHED"}
+VALID_PHASES = {"PLANNING", "EXECUTING", "REVIEWING", "DEBUGGING", "FINISHED"}
 PHASE_PROMPTS = {
     "PLANNING": "mw-plan.md",
     "EXECUTING": "mw-execute.md",
     "REVIEWING": "mw-review.md",
+    "DEBUGGING": "mw-debug.md",
 }
 CORE_PROMPT_ORDER = {
     "mw-plan.md": 0,
     "mw-execute.md": 1,
     "mw-review.md": 2,
+    "mw-debug.md": 3,
 }
 
 Task = dict[str, str]
@@ -70,6 +72,12 @@ def default_state(status: str = "idle") -> State:
         "completed": 0,
         "total": 0,
         "tasks": [],
+        "last_error": {
+            "command": "",
+            "stderr": "",
+            "returncode": "",
+            "created_at": "",
+        },
     }
 
 
@@ -131,6 +139,10 @@ def read_state(root: Path) -> State:
             state["current_task_id"] = value
         elif section == "progress" and key in {"completed", "total"}:
             state[key] = int(value or 0)
+        elif section == "last_error" and key in {"command", "stderr", "returncode", "created_at"}:
+            last_error = state.get("last_error")
+            if isinstance(last_error, dict):
+                last_error[key] = value
 
     state["tasks"] = tasks
     return state
@@ -171,6 +183,18 @@ def write_state(root: Path, state: State) -> None:
                 f"    title: {quote_value(task['title'])}",
             ]
         )
+    last_error = state.get("last_error")
+    if isinstance(last_error, dict) and any(last_error.get(key) for key in ("command", "stderr", "returncode")):
+        lines.extend(
+            [
+                "",
+                "last_error:",
+                f"  command: {quote_value(last_error.get('command', ''))}",
+                f"  stderr: {quote_value(last_error.get('stderr', ''))}",
+                f"  returncode: {quote_value(last_error.get('returncode', ''))}",
+                f"  created_at: {last_error.get('created_at', '')}",
+            ]
+        )
     (root / "state.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -203,6 +227,13 @@ def normalize_tasks(task_list: object) -> list[Task]:
             raise SystemExit(f"Invalid task id: {task_id}. Use task-1, task-2, ...")
         tasks.append({"id": task_id, "status": "pending", "title": title})
     return tasks
+
+
+def normalize_error_text(value: object, max_length: int = 500) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) > max_length:
+        return text[: max_length - 3] + "..."
+    return text
 
 
 def append_log(root: Path, message: str) -> None:
@@ -291,6 +322,20 @@ def apply_action(root: Path, payload: JsonObject) -> State:
         if not task_id:
             raise SystemExit("mark_task_done requires data.id or data.task_id.")
         return mark_task_done(root, task_id)
+
+    if action == "record_error":
+        return record_error(
+            root,
+            command=data.get("command", ""),
+            stderr=data.get("stderr", ""),
+            returncode=data.get("returncode", ""),
+        )
+
+    if action == "enqueue_fix_task":
+        title = data.get("title") or data.get("task") or ""
+        if not str(title).strip():
+            raise SystemExit("enqueue_fix_task requires data.title.")
+        return enqueue_fix_task(root, str(title), source_error=data.get("source_error", ""))
 
     raise SystemExit(f"Unknown action: {action}")
 
@@ -391,6 +436,45 @@ def mark_task_done(root: Path, target_id: str) -> State:
         set_phase(state, root, "REVIEWING")
     write_state(root, state)
     append_log(root, f"marked {target_id} done")
+    return state
+
+
+def record_error(root: Path, command: object, stderr: object, returncode: object = "") -> State:
+    state = read_state(root)
+    state["last_error"] = {
+        "command": normalize_error_text(command, 200),
+        "stderr": normalize_error_text(stderr, 500),
+        "returncode": normalize_error_text(returncode, 40),
+        "created_at": now_iso(),
+    }
+    set_phase(state, root, "DEBUGGING")
+    refresh_task_progress(state)
+    write_state(root, state)
+    append_log(root, f"recorded error and entered DEBUGGING command={state['last_error']['command']}")
+    return state
+
+
+def enqueue_fix_task(root: Path, title: str, source_error: object = "") -> State:
+    state = read_state(root)
+    tasks = state_tasks(state)
+    next_id = f"task-{len(tasks) + 1}"
+    fix_task = {"id": next_id, "status": "pending", "title": title.strip()}
+    insert_at = len(tasks)
+    for index, task in enumerate(tasks):
+        if task.get("status") != "done":
+            insert_at = index
+            break
+    tasks.insert(insert_at, fix_task)
+    state["tasks"] = tasks
+    if source_error:
+        last_error = state.get("last_error")
+        if isinstance(last_error, dict):
+            last_error["stderr"] = normalize_error_text(source_error, 500)
+            last_error["created_at"] = last_error.get("created_at") or now_iso()
+    refresh_task_progress(state)
+    set_phase(state, root, "EXECUTING")
+    write_state(root, state)
+    append_log(root, f"enqueued fix task {next_id}")
     return state
 
 
@@ -547,6 +631,13 @@ def cmd_apply_action(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_record_error(args: argparse.Namespace) -> int:
+    root = require_root(Path.cwd())
+    state = record_error(root, args.command, args.stderr, args.returncode)
+    print_status(state)
+    return 0
+
+
 def cmd_complete_current(args: argparse.Namespace) -> int:
     root = require_root(Path.cwd())
     prompts = prompt_files(root)
@@ -618,7 +709,7 @@ def build_parser() -> argparse.ArgumentParser:
     done_parser.set_defaults(func=cmd_done_task)
 
     phase_parser = subparsers.add_parser("set-phase", help="set workflow phase")
-    phase_parser.add_argument("phase", help="PLANNING, EXECUTING, REVIEWING, or FINISHED")
+    phase_parser.add_argument("phase", help="PLANNING, EXECUTING, REVIEWING, DEBUGGING, or FINISHED")
     phase_parser.set_defaults(func=cmd_set_phase)
 
     action_parser = subparsers.add_parser("apply-action", help="apply AI JSON action to state")
@@ -626,6 +717,12 @@ def build_parser() -> argparse.ArgumentParser:
     action_source.add_argument("--json", help="JSON action string")
     action_source.add_argument("--file", help="path to JSON action file")
     action_parser.set_defaults(func=cmd_apply_action)
+
+    error_parser = subparsers.add_parser("record-error", help="record command stderr and enter DEBUGGING")
+    error_parser.add_argument("--command", required=True, help="failed command")
+    error_parser.add_argument("--stderr", required=True, help="stderr or error summary")
+    error_parser.add_argument("--returncode", default="", help="process return code")
+    error_parser.set_defaults(func=cmd_record_error)
 
     subparsers.add_parser("complete-current", help="advance current prompt file").set_defaults(func=cmd_complete_current)
     subparsers.add_parser("stop", help="stop workflow").set_defaults(func=cmd_stop)
