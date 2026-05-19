@@ -31,27 +31,38 @@ When reporting execution, use this strict JSON shape:
 
 ```json
 {
-  "phase": "EXECUTING",
-  "task": {
+  "action": "mark_task_done",
+  "data": {
     "id": "task-1",
-    "title": "Current task title",
-    "result": "done"
-  },
-  "files_changed": ["relative/path.ext"],
-  "validation": [
-    {
-      "command": "test command",
-      "result": "passed"
-    }
-  ],
-  "state_update": {
-    "method": "mary_workflow.py",
-    "command": "python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py done-task --id task-1"
+    "result": "done",
+    "files_changed": ["relative/path.ext"],
+    "validation": [
+      {
+        "command": "test command",
+        "result": "passed"
+      }
+    ]
   }
 }
 ```
 
-Use `"result": "blocked"` when implementation or validation cannot be completed. In that case, do not run `done-task`; include the blocker in the JSON output.
+Use `"result": "blocked"` when implementation or validation cannot be completed. In that case, do not output `mark_task_done`, do not run `apply-action`, and leave the workflow in `EXECUTING`; include the blocker in your human summary.
+
+### Workflow Protocol
+
+After code and validation complete successfully, output this machine-readable action object:
+
+```json
+{"action":"mark_task_done","data":{"id":"task-1","result":"done","files_changed":["relative/path.ext"],"validation":[{"command":"test command","result":"passed"}]}}
+```
+
+Then apply it from the project root:
+
+```bash
+python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py apply-action --json '{"action":"mark_task_done","data":{"id":"task-1","result":"done","files_changed":["relative/path.ext"],"validation":[{"command":"test command","result":"passed"}]}}'
+```
+
+You must not enter `REVIEWING` by hand. Mary Workflow enters `REVIEWING` only after the state update interface marks the final pending task done.
 
 ### Procedure
 
@@ -64,17 +75,17 @@ Use `"result": "blocked"` when implementation or validation cannot be completed.
 2. If there is no pending task, stop execution and let the workflow move to `REVIEWING`.
 3. Implement only the current task. Keep unrelated refactors and unrelated files out of the change.
 4. Run focused validation that matches the files you changed.
-5. If the implementation is complete, mark the task done:
+5. If the implementation is complete, output `mark_task_done` action JSON and apply it:
 
    ```bash
-   python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py done-task --id task-1
+   python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py apply-action --json '{"action":"mark_task_done","data":{"id":"task-1","result":"done","files_changed":["relative/path.ext"],"validation":[{"command":"test command","result":"passed"}]}}'
    ```
 
-6. If validation fails or the task is blocked, do not mark the task done. Explain the blocker and leave the workflow in `EXECUTING`.
+6. If validation fails or the task is blocked, do not output `mark_task_done`, do not call `apply-action`, and leave the workflow in `EXECUTING`.
 
 ### Output
 
-Return the JSON execution result, then briefly summarize whether another task remains.
+Return the JSON action object only after successful implementation and validation, apply it with `apply-action`, then briefly summarize whether another task remains.
 
 ## 中文说明
 
@@ -82,13 +93,13 @@ Return the JSON execution result, then briefly summarize whether another task re
 
 - 输入：`.mary-workflow/state.yaml` 里的第一个 `pending` 任务。
 - 执行：实现当前任务，并运行匹配改动范围的验证。
-- 成功：调用 `done-task --id task-1` 把任务标记为 `done`。
+- 成功：输出 `{"action":"mark_task_done","data":{...}}`，再调用 `apply-action` 把任务标记为 `done`。
 - 失败：不要标记完成，说明阻塞原因，阶段保持在 `EXECUTING`。
 - 自动流转：最后一个任务完成后，脚本会把阶段切到 `REVIEWING`。
 - 强规则：执行前必须检查当前阶段确实是 `EXECUTING`。
 - 上下文隔离：只看、只改和当前任务有关的文件，不要顺手重写整个项目。
-- 输出格式：执行结果必须能表达成 JSON，包含任务、改动文件、验证和状态更新命令。
-- 状态更新：只能通过 `mary_workflow.py done-task --id ...`，不要手动改 `state.yaml`。
+- 输出格式：执行结果必须使用 action JSON envelope，包含任务 id、改动文件和验证。
+- 状态更新：只能通过 `mary_workflow.py apply-action`，不要手动改 `state.yaml`。
 
 使用时要注意：示例里的 `task-1` 只是例子，真实执行时应该使用 `next-task` 输出的任务 id。
 
@@ -96,5 +107,6 @@ Return the JSON execution result, then briefly summarize whether another task re
 
 - 任务状态：`pending`、`done`
 - 阶段名：`EXECUTING`、`REVIEWING`
-- 命令名：`next-task`、`done-task`
-- JSON key：`phase`、`task`、`files_changed`、`validation`、`state_update`
+- Action 名：`mark_task_done`
+- 命令名：`next-task`、`apply-action`
+- JSON key：`action`、`data`、`id`、`result`、`files_changed`、`validation`

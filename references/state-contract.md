@@ -77,6 +77,12 @@ Additional `.md` prompts may be added later, but the MVP phase loop uses these t
 Each core prompt must enforce:
 
 - Phase gate: read `.mary-workflow/state.yaml` first and verify `workflow.phase` matches the prompt.
-- Structured output: return a strict JSON object for task plans, execution results, or review decisions.
-- State update boundary: update state only through `scripts/mary_workflow.py`; do not edit `state.yaml` by hand.
+- Structured output: return an action JSON envelope, `{"action":"...","data":{...}}`.
+- State update boundary: update state only through `scripts/mary_workflow.py apply-action`; do not edit `state.yaml` by hand.
 - Context isolation: execution should inspect and edit only files directly related to the current task unless explicitly instructed otherwise.
+
+Supported action names:
+
+- `update_state`: replace the task list and move to the target phase.
+- `mark_task_done`: mark one task done and advance to the next task or `REVIEWING`.
+- `set_phase`: move to `PLANNING`, `EXECUTING`, `REVIEWING`, or `FINISHED`.

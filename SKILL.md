@@ -29,8 +29,8 @@ python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py <command>
 4. Prompts may be bilingual: keep the English `Agent Protocol` as the execution contract and use Chinese `中文说明` sections for human explanation.
 5. Machine-facing names stay in English: command names, file names, YAML keys, task ids, and phase values.
 6. Every phase prompt must gate on `.mary-workflow/state.yaml` before acting and stop on phase mismatch.
-7. Every phase prompt must use a strict JSON result shape for user-visible structured output.
-8. Never hand-edit `.mary-workflow/state.yaml` during phase execution; update state through `scripts/mary_workflow.py`.
+7. Every phase prompt must use an action JSON envelope for user-visible structured output: `{"action":"...","data":{...}}`.
+8. Never hand-edit `.mary-workflow/state.yaml` during phase execution; update state through `scripts/mary_workflow.py apply-action`.
 9. The core phase prompts are:
 
    - `PLANNING`: `.mary-workflow/prompts/mw-plan.md`
@@ -49,29 +49,28 @@ When executing a prompt:
 3. Read `.mary-workflow/prompts/<current prompt>`.
 4. Treat the prompt as the active user task.
 5. Complete the phase with normal Codex engineering discipline.
-6. Use `mary_workflow.py` commands from the prompt to update phase and task state.
-7. Report the result using the prompt's JSON shape, then add a brief human summary when useful.
+6. Use `mary_workflow.py apply-action` with the prompt's action JSON to update phase and task state.
+7. Report the action JSON object, then add a brief human summary when useful.
 
 ## Phase Commands
 
 - Planning writes up to 3 tasks and enters execution:
 
   ```bash
-  python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py plan --task "Task one" --task "Task two"
+  python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py apply-action --json '{"action":"update_state","data":{"phase":"EXECUTING","tasks":[{"id":"task-1","title":"Task one"},{"id":"task-2","title":"Task two"}]}}'
   ```
 
 - Execution reads the first pending task and marks completed work done:
 
   ```bash
   python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py next-task
-  python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py done-task --id task-1
+  python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py apply-action --json '{"action":"mark_task_done","data":{"id":"task-1","result":"done","files_changed":[],"validation":[]}}'
   ```
 
 - Review moves to the next phase:
 
   ```bash
-  python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py set-phase PLANNING
-  python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py set-phase FINISHED
+  python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py apply-action --json '{"action":"set_phase","data":{"phase":"FINISHED","decision":"finished","findings":[],"validation":[]}}'
   ```
 
 ## File Contract
