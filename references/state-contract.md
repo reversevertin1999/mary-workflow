@@ -72,6 +72,18 @@ mw-review.md
 
 Additional `.md` prompts may be added later, but the MVP phase loop uses these three names directly.
 
+## Codex Alias Bridge
+
+Mary Workflow exposes Codex-facing slash aliases through `scripts/mw_codex.py` and the skill instructions:
+
+- `/mw-plan`: render `mw-plan.md`.
+- `/mw-run`: render `mw-execute.md`.
+- `/mw-review`: render `mw-review.md`.
+- `/mw-next`: render the prompt for the current `workflow.phase`.
+- `/mw-status`: render `state.yaml` without a phase prompt.
+
+The bridge prints the current `state.yaml` plus the resolved phase prompt. Codex should treat that output as the active instruction context for the turn.
+
 ## Phase Prompt Guardrails
 
 Each core prompt must enforce:

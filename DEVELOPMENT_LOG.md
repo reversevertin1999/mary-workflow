@@ -161,3 +161,23 @@ Commit: `c140137` - `Add action protocol to phase prompts`
 
 - 继续第三步：配置 `.codex-plugin/plugin.json` 和 slash command 接入。
 - 在接入插件前，先确认 Codex plugin schema 支持哪些命令定义和上下文注入方式。
+
+## 2026-05-19 19:46:30 +08:00
+
+Third step: Codex plugin bridge.
+
+完成内容：
+
+- 新增 `.codex-plugin/plugin.json`，使用当前本地 Codex plugin manifest 支持的字段。
+- 新增 `scripts/mw_codex.py`，作为 Codex alias bridge。
+- 支持 `/mw-plan`、`/mw-run`、`/mw-review`、`/mw-next`、`/mw-status`。
+- 在 `SKILL.md` 和 `references/state-contract.md` 中记录 alias 行为。
+- 明确当前 manifest schema 不定义原生 slash-command routing；slash alias 由 skill 说明和 `scripts/mw_codex.py` 共同处理。
+
+验证：
+
+- `plugin.json` 通过 `python -m json.tool` 校验。
+- 确认 manifest 未使用未验证支持的 `commands`、`slashCommands`、`systemMessage` 字段。
+- `scripts/mw_codex.py` Python 语法检查通过。
+- 运行 skill 验证，结果为 `Skill is valid!`。
+- 冒烟测试覆盖 `/mw-plan`、`/mw-run`、`/mw-review`、`/mw-next`、`/mw-status` 的 prompt/context 解析。

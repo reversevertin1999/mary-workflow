@@ -1,0 +1,40 @@
+{
+  "name": "mary-workflow",
+  "version": "0.1.0",
+  "description": "Minimal project-local planning, execution, and review workflow for Codex.",
+  "author": {
+    "name": "Mary Workflow",
+    "url": "https://github.com/reversevertin1999/mary-workflow"
+  },
+  "homepage": "https://github.com/reversevertin1999/mary-workflow",
+  "repository": "https://github.com/reversevertin1999/mary-workflow",
+  "license": "MIT",
+  "keywords": [
+    "workflow",
+    "planning",
+    "prompt-engineering",
+    "codex",
+    "ai-agent"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Mary Workflow",
+    "shortDescription": "Run a small local plan-execute-review workflow",
+    "longDescription": "Mary Workflow packages a lightweight Codex skill and local helper scripts for project-local planning, execution, review, state transitions, and prompt-driven action updates through a .mary-workflow workspace.",
+    "developerName": "Mary Workflow",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/reversevertin1999/mary-workflow",
+    "defaultPrompt": [
+      "/mw:init",
+      "/mw-plan",
+      "/mw-run"
+    ],
+    "brandColor": "#4F46E5",
+    "screenshots": []
+  }
+}
