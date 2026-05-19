@@ -50,7 +50,22 @@ python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py <command>
 
 The Codex plugin manifest lives at `.codex-plugin/plugin.json`. It exposes Mary Workflow metadata and this skill to Codex.
 
-Native slash command entries live in the plugin root `commands/` directory. Codex discovers those Markdown files by filename:
+Codex slash autocomplete is surfaced through command-specific sub-skills under `skills/`, following the same pattern as Hypo-Workflow:
+
+- `skills/init/SKILL.md` -> `Mary Workflow: Init`
+- `skills/start/SKILL.md` -> `Mary Workflow: Start`
+- `skills/plan/SKILL.md` -> `Mary Workflow: Plan`
+- `skills/run/SKILL.md` -> `Mary Workflow: Run`
+- `skills/review/SKILL.md` -> `Mary Workflow: Review`
+- `skills/debug/SKILL.md` -> `Mary Workflow: Debug`
+- `skills/next/SKILL.md` -> `Mary Workflow: Next`
+- `skills/resume/SKILL.md` -> `Mary Workflow: Resume`
+- `skills/status/SKILL.md` -> `Mary Workflow: Status`
+- `skills/stop/SKILL.md` -> `Mary Workflow: Stop`
+
+Each sub-skill description includes the user-facing alias such as `/mw-init`, so Codex can match typed slash text to the right Mary command.
+
+Command Markdown files also live in the plugin root `commands/` directory for clients that support file-based command loading:
 
 - `commands/mw-init.md` -> `/mw-init`
 - `commands/mw-start.md` -> `/mw-start`
@@ -63,7 +78,7 @@ Native slash command entries live in the plugin root `commands/` directory. Code
 - `commands/mw-status.md` -> `/mw-status`
 - `commands/mw-stop.md` -> `/mw-stop`
 
-`plugin.json` remains metadata. Command behavior is defined by the Markdown files above, and phase prompt loading is handled by `scripts/mw_codex.py`.
+`plugin.json` remains metadata. Autocomplete behavior comes from sub-skill metadata, and phase prompt loading is handled by `scripts/mw_codex.py`.
 
 When the user invokes `/mw-plan`, `/mw-run`, `/mw-review`, `/mw-debug`, `/mw-next`, `/mw-resume`, or `/mw-status`:
 

@@ -16,7 +16,7 @@
     "codex",
     "ai-agent"
   ],
-  "skills": "./",
+  "skills": "./skills/",
   "interface": {
     "displayName": "Mary Workflow",
     "shortDescription": "Run a small local plan-execute-review workflow",

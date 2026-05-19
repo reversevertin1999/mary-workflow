@@ -83,7 +83,25 @@ Additional `.md` prompts may be added later, but the MVP phase loop uses these f
 
 ## Codex Commands and Bridge
 
-Mary Workflow exposes Codex-facing slash commands through top-level command Markdown files:
+Mary Workflow exposes Codex-facing slash commands through command-specific sub-skills:
+
+```text
+skills/
+├── init/SKILL.md
+├── start/SKILL.md
+├── plan/SKILL.md
+├── run/SKILL.md
+├── review/SKILL.md
+├── debug/SKILL.md
+├── next/SKILL.md
+├── resume/SKILL.md
+├── status/SKILL.md
+└── stop/SKILL.md
+```
+
+These sub-skills follow the Hypo-Workflow autocomplete pattern: each command is a small skill with its own `name` and `description`.
+
+Mary Workflow also keeps top-level command Markdown files for clients that support file-based command loading:
 
 ```text
 commands/

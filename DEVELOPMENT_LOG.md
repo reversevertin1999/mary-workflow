@@ -253,3 +253,42 @@ Native slash command registration.
   - `/mw-review` 能加载 `mw-review.md`。
   - `/mw-next`、`/mw-resume`、`/mw-status` 在 `FINISHED` 阶段返回只读状态上下文。
   - 未初始化项目调用 phase bridge 时，会提示先运行 `/mw-init`。
+
+## 2026-05-19 22:35:35 +08:00
+
+Hypo-style sub-skill command surface.
+
+完成内容：
+
+- 参考 Hypo-Workflow 的 `skills/<command>/SKILL.md` 实现方式，为 Mary Workflow 新增 10 个命令子技能：
+  - `skills/init/SKILL.md`
+  - `skills/start/SKILL.md`
+  - `skills/plan/SKILL.md`
+  - `skills/run/SKILL.md`
+  - `skills/review/SKILL.md`
+  - `skills/debug/SKILL.md`
+  - `skills/next/SKILL.md`
+  - `skills/resume/SKILL.md`
+  - `skills/status/SKILL.md`
+  - `skills/stop/SKILL.md`
+- 将 `.codex-plugin/plugin.json` 的 `skills` 从 `./` 改为 `./skills/`，让 Codex UI 像 Hypo 一样发现多个命令级技能。
+- 保留根 `SKILL.md` 作为总说明和手动触发兜底。
+- 保留 `commands/mw-*.md`，兼容支持 file-based command loading 的客户端。
+- 更新 `SKILL.md` 和 `references/state-contract.md`，明确 autocomplete 主要靠子 skill metadata，而不是 `commands/*.md`。
+
+验证：
+
+- `.codex-plugin/plugin.json` JSON 校验通过。
+- 全部 10 个 `skills/*/SKILL.md` 文件存在，并包含 `name` 和 `description` frontmatter。
+- 运行 skill 验证，结果为 `Skill is valid!`。
+- 使用 `codex debug prompt-input '/mw-init'` 和 `codex debug prompt-input '/mw'` 确认 Mary 子技能进入可用 skills 列表：
+  - `mary-workflow:init`
+  - `mary-workflow:start`
+  - `mary-workflow:plan`
+  - `mary-workflow:run`
+  - `mary-workflow:review`
+  - `mary-workflow:debug`
+  - `mary-workflow:next`
+  - `mary-workflow:resume`
+  - `mary-workflow:status`
+  - `mary-workflow:stop`
