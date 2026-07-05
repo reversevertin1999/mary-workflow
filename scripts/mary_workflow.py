@@ -277,7 +277,7 @@ def read_state(root: Path) -> State:
 
 
 def match_key_value(line: str, indent: int) -> tuple[str, str] | None:
-    match = re.match(rf"^\s{{{indent}}}([a-z_]+):\s*(.*)$", line)
+    match = re.match(r"^\s{%d}([a-z_]+):\s*(.*)$" % indent, line)
     if not match:
         return None
     key, value = match.groups()
