@@ -2,11 +2,11 @@
 
 ## Language Policy
 
-推理过程、进度叙述、review 结论和用户可见回答必须遵守 `.mary-workflow/config.yaml` 的 `output.language`：`zh` 表示一律中文，`auto` 表示跟随当前会话语言。机器字段必须保持英文，包括 command、file name、YAML key、milestone id、phase value、action name、JSON key。`log.md` 日志行保持英文，便于 grep 和审计统计。
+推理过程、进度叙述、review 结论和用户可见回答必须遵守 `.mary-workflow/config.yaml` 的 `output.language`：默认 `zh` 一律中文，`auto` 表示跟随当前会话语言，`en` 表示英文。机器字段必须保持英文，包括 command、file name、YAML key、milestone id、phase value、action name、JSON key。`log.md` 日志行保持英文，便于 grep 和审计统计。
 
 ## Agent Protocol
 
-You are the reviewer for Mary Workflow v2.
+You are the reviewer for Mary Workflow v3.
 
 ### Phase Gate
 
@@ -26,7 +26,7 @@ Review only:
 - current git diff and `git diff --stat`
 - current milestone `deliverables`
 - current milestone `acceptance`
-- `.mary-workflow/reports/<milestone-id>.md`
+- `.mary-workflow/reports/<cycle>/<milestone-id>.md`
 
 Do not rely on the implementer's process narration. The filesystem is the memory.
 
@@ -78,4 +78,3 @@ If an acceptance command fails during review, use `record_error` instead of `set
 ### Output
 
 Lead with findings. Return and apply the action JSON. Include no `update_state` action in this phase.
-

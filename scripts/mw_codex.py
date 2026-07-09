@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Codex-facing bridge for Mary Workflow v2 slash aliases."""
+"""Codex-facing bridge for Mary Workflow v3 slash aliases."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from mary_workflow import PHASE_ACTIONS, PHASE_PROMPTS, WORKFLOW_DIR, current_milestone, read_state
+from mary_workflow import BRIEF_FILE, PHASE_ACTIONS, PHASE_PROMPTS, REPORTS_DIR, WORKFLOW_DIR, current_milestone, read_config, read_state
 
 
 PROMPTS_DIR = "prompts"
@@ -65,7 +65,7 @@ def render_prompt(root: Path, alias: str) -> str:
 
     prompt_text = prompt_path.read_text(encoding="utf-8")
     return (
-        "# Mary Workflow v2 Context\n\n"
+        "# Mary Workflow v3 Context\n\n"
         f"Alias: /{normalized}\n"
         f"Resolved phase: {phase}\n"
         f"Prompt file: {prompt_path}\n\n"
@@ -98,10 +98,19 @@ def render_project_snapshot(state: dict[str, object]) -> str:
     structure = "\n".join(f"- {item}" for item in state.get("project_structure", [])) or "- (empty)"
     tech_stack = ", ".join(state.get("project_tech_stack", [])) or "unknown"
     test_commands = "\n".join(f"- `{item}`" for item in state.get("project_test_commands", [])) or "- `manual validation`"
+    config = read_config(Path(str(state.get("project_root", "."))) / WORKFLOW_DIR)
+    brief_path = Path(str(state.get("project_root", "."))) / WORKFLOW_DIR / BRIEF_FILE
     return (
         "## Project Snapshot\n\n"
+        f"- cycle: `{state.get('cycle', 'C0')}`\n"
         f"- root: `{state.get('project_root', '')}`\n"
+        f"- project_brief: `{brief_path}`\n"
         f"- tech_stack: {tech_stack}\n\n"
+        "### Plan Interview\n\n"
+        f"- plan.interview: `{config.get('plan_interview', 'on')}`\n"
+        f"- plan.interview.max_rounds: `{config.get('plan_interview_max_rounds', '3')}`\n"
+        f"- plan.interview.questions_per_round: `{config.get('plan_questions_per_round', '3-5')}`\n"
+        "- adaptive_rounds: `small tasks may use 0-1 round; 5+ milestone work may use 2-3 rounds`\n\n"
         "### Known Test Commands\n\n"
         f"{test_commands}\n\n"
         "### Structure Sample\n\n"
@@ -134,7 +143,7 @@ def render_milestone_context(root: Path, state: dict[str, object], phase: str) -
         *(f"- `{item}`" for item in milestone.get("acceptance", [])),
     ]
     if phase == "REVIEWING":
-        report = root / WORKFLOW_DIR / "reports" / f"{milestone['id']}.md"
+        report = root / WORKFLOW_DIR / REPORTS_DIR / str(state.get("cycle", "C0")) / f"{milestone['id']}.md"
         fields.extend(["", "### Report File", f"- `{report}`"])
     return "\n".join(fields)
 
@@ -165,7 +174,7 @@ def git_diff_stat(root: Path) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Resolve Mary Workflow v2 slash aliases for Codex")
+    parser = argparse.ArgumentParser(description="Resolve Mary Workflow v3 slash aliases for Codex")
     parser.add_argument(
         "alias",
         choices=["mw-plan", "mw-run", "mw-debug", "mw-status"],

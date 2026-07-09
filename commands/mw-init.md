@@ -1,5 +1,5 @@
 ---
-description: Initialize or reset Mary Workflow v2 in the current project.
+description: Initialize or reset Mary Workflow v3 in the current project.
 argument-hint: [--reset]
 ---
 
@@ -21,6 +21,6 @@ Initialize Mary Workflow in the current project directory.
    python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py init --reset
    ```
 
-3. Report the initialized v2 state, project snapshot, and current phase.
-4. Tell the user the next command is `/mw-plan`.
-
+3. Report the project brief path, current cycle, project snapshot, and current phase in Chinese by default.
+4. Ask whether the user wants later plan/run output in `zh`, `auto`, or `en`; if they answer, apply `update_project` with `language`.
+5. Tell the user the next command is `/mw-plan`.

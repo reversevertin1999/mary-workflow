@@ -350,3 +350,35 @@ v1.1 milestone workflow refactor.
   - review `set_phase EXECUTING` 可打回当前 milestone
   - 再次完成后 `set_phase FINISHED`
   - 日志可区分 `update_state` 与 `set_phase`
+
+## 2026-07-09
+
+v3 cycle-aware planning refactor.
+
+完成内容：
+
+- 将状态契约升级为 `version: 3`，新增 `cycle` 字段，并拒载 v1/v2 老 state。
+- `/mw-init` 产出 `.mary-workflow/project-brief.md`，并在 `state.yaml` 的 `project` 段记录 brief 路径和输出语言。
+- `init` 默认中文，`config.yaml` 新增 `output.language`，命令层 `status` / `stop` / `apply-action` 摘要按配置输出。
+- 新增 `update_project` 信封，允许在 `PLANNING` 中合法修正项目结构、技术栈、测试方式和语言配置。
+- `/mw-plan` 引入自适应多轮 interview 机制，`config.yaml` 新增 `plan.interview`、`plan.interview.max_rounds` 和每轮问题范围。
+- `update_state` 在 interview 开启时强制要求 `clarifications`，缺失即拒收。
+- 2026-07-09 追加增强：interview 改为自适应多轮递进，默认 1 轮、上限 3 轮；小任务可 0 轮默认假设确认，大任务可 2 到 3 轮深挖；后续轮次必须锚定上一轮答案中的不确定点。
+- 新增 `/mw-cycle`、`commands/mw-cycle.md` 和 `skills/cycle/SKILL.md`，将当前 cycle 的 state/log/reports 归档到 `.mary-workflow/cycles/<cycle>/`，清空活动 milestones/reports/log，并开启下一 cycle。
+- 报告路径 cycle 化为 `.mary-workflow/reports/<cycle>/<milestone-id>.md`。
+- `project-brief.md` 作为跨 cycle 长期记忆保留，milestones、reports、log、lease 和 clarifications 作为 cycle 内短期记忆滚动归档。
+- `.codex-plugin/plugin.json` 版本升至 `0.3.0`，`SKILL.md` 与 `references/state-contract.md` 同步 v3 命令面和状态契约。
+
+验证：
+
+- `python -m py_compile scripts/mary_workflow.py scripts/mw_codex.py` 通过。
+- `.codex-plugin/plugin.json` JSON 校验通过。
+- `git diff --check` 通过。
+- 临时目录冒烟测试通过：
+  - `init` 生成 v3 state、`config.yaml` 和 `project-brief.md`。
+  - `update_project` 可修正语言、技术栈和测试命令。
+  - 缺失 `clarifications` 的 `update_state` 在 `plan.interview: on` 时被拒收。
+  - 新 config 生成 `plan.interview.max_rounds: 3` 和 `plan.interview.questions_per_round: "3-5"`，`mw-plan` 上下文可渲染多轮 interview 配置。
+  - 合法 `update_state` 进入 `EXECUTING`，`mark_task_done` 自动进入 `REVIEWING`。
+  - review `set_phase FINISHED` 完成当前 cycle。
+  - `/mw-cycle` 将 C0 的 state/log/reports 归档到 `.mary-workflow/cycles/C0/`，活动 state 切到 C1。

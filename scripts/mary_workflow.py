@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime helper for Mary Workflow v2.
+"""Runtime helper for Mary Workflow v3.
 
 The helper intentionally avoids third-party dependencies. It owns a small
 YAML-shaped state file and parses only the fields it writes.
@@ -21,7 +21,9 @@ from typing import Any
 WORKFLOW_DIR = ".mary-workflow"
 PROMPTS_DIR = "prompts"
 REPORTS_DIR = "reports"
-STATE_VERSION = 2
+BRIEF_FILE = "project-brief.md"
+CYCLES_DIR = "cycles"
+STATE_VERSION = 3
 VALID_PHASES = {"PLANNING", "EXECUTING", "REVIEWING", "DEBUGGING", "FINISHED"}
 PHASE_PROMPTS = {
     "PLANNING": "mw-plan.md",
@@ -30,7 +32,7 @@ PHASE_PROMPTS = {
     "DEBUGGING": "mw-debug.md",
 }
 PHASE_ACTIONS = {
-    "PLANNING": {"update_state"},
+    "PLANNING": {"update_project", "update_state"},
     "EXECUTING": {"mark_task_done", "record_error"},
     "REVIEWING": {"set_phase", "record_error"},
     "DEBUGGING": {"enqueue_fix_task"},
@@ -92,14 +94,18 @@ def default_state(project_root: Path | None = None, status: str = "idle") -> Sta
     project = detect_project(project_root or Path.cwd())
     return {
         "version": STATE_VERSION,
+        "cycle": "C0",
         "status": status,
         "phase": "PLANNING",
         "started_at": "",
         "updated_at": now_iso(),
         "project_root": project["root"],
+        "project_brief": str(Path(WORKFLOW_DIR) / BRIEF_FILE),
+        "project_language": "zh",
         "project_structure": project["structure"],
         "project_tech_stack": project["tech_stack"],
         "project_test_commands": project["test_commands"],
+        "clarifications": [],
         "current_index": 0,
         "current_prompt": "",
         "current_milestone_id": "",
@@ -116,6 +122,7 @@ def default_state(project_root: Path | None = None, status: str = "idle") -> Sta
             "created_at": "",
         },
         "action_counts": {
+            "update_project": 0,
             "update_state": 0,
             "mark_task_done": 0,
             "set_phase": 0,
@@ -157,6 +164,7 @@ def read_state(root: Path) -> State:
     state["project_structure"] = []
     state["project_tech_stack"] = []
     state["project_test_commands"] = []
+    state["clarifications"] = []
     milestones: list[Milestone] = []
     section = ""
     subsection = ""
@@ -176,6 +184,9 @@ def read_state(root: Path) -> State:
         if not line.startswith(" ") and line.startswith("version:"):
             state["version"] = parse_int(line.split(":", 1)[1])
             continue
+        if not line.startswith(" ") and line.startswith("cycle:"):
+            state["cycle"] = parse_scalar(line.split(":", 1)[1])
+            continue
 
         if section == "project":
             if re.match(r"^\s{2}(structure|tech_stack|test_commands):\s*$", line):
@@ -190,6 +201,19 @@ def read_state(root: Path) -> State:
                 key, value = key_value
                 if key == "root":
                     state["project_root"] = value
+                elif key == "brief":
+                    state["project_brief"] = value
+                elif key == "language":
+                    state["project_language"] = value
+            continue
+
+        if section == "planning":
+            if line.startswith("  clarifications:"):
+                subsection = "clarifications"
+                continue
+            item = re.match(r"^\s{4}-\s*(.*)$", line)
+            if item and subsection == "clarifications":
+                state["clarifications"].append(parse_scalar(item.group(1)))
             continue
 
         if section == "milestones":
@@ -267,7 +291,7 @@ def read_state(root: Path) -> State:
     if state.get("version") != STATE_VERSION:
         raise SystemExit(
             f"Unsupported Mary Workflow state version: {state.get('version') or 'missing'}. "
-            "Run /mw-init --reset to create a v2 state. v1 state files are intentionally not migrated."
+            "Run /mw-init --reset to create a v3 state. v1/v2 state files are intentionally not migrated."
         )
 
     state["milestones"] = milestones
@@ -277,7 +301,7 @@ def read_state(root: Path) -> State:
 
 
 def match_key_value(line: str, indent: int) -> tuple[str, str] | None:
-    match = re.match(r"^\s{%d}([a-z_]+):\s*(.*)$" % indent, line)
+    match = re.match(r"^\s{%d}([a-z_.]+):\s*(.*)$" % indent, line)
     if not match:
         return None
     key, value = match.groups()
@@ -313,6 +337,7 @@ def write_state(root: Path, state: State) -> None:
     milestones = state_milestones(state)
     lines = [
         f"version: {STATE_VERSION}",
+        f"cycle: {state.get('cycle', 'C0')}",
         "",
         "workflow:",
         f"  status: {state['status']}",
@@ -322,6 +347,8 @@ def write_state(root: Path, state: State) -> None:
         "",
         "project:",
         f"  root: {quote_value(state['project_root'])}",
+        f"  brief: {quote_value(state.get('project_brief', str(Path(WORKFLOW_DIR) / BRIEF_FILE)))}",
+        f"  language: {state.get('project_language', 'zh')}",
         "  structure:",
     ]
     lines.extend(f"    - {quote_value(item)}" for item in state.get("project_structure", []))
@@ -331,6 +358,10 @@ def write_state(root: Path, state: State) -> None:
     lines.extend(f"    - {quote_value(item)}" for item in state.get("project_test_commands", []))
     lines.extend(
         [
+            "",
+            "planning:",
+            "  clarifications:",
+            *(f"    - {quote_value(item)}" for item in state.get("clarifications", [])),
             "",
             "current:",
             f"  index: {state['current_index']}",
@@ -562,7 +593,9 @@ def apply_action(root: Path, payload: JsonObject) -> State:
 
     try:
         append_log(root, summarize_action(action, data))
-        if action == "update_state":
+        if action == "update_project":
+            state = action_update_project(root, state, data)
+        elif action == "update_state":
             state = action_update_state(root, state, data)
         elif action == "mark_task_done":
             state = action_mark_task_done(root, state, data)
@@ -598,6 +631,8 @@ def reject_action(root: Path, state: State, action: str, reason: str) -> State:
 def summarize_action(action: str, data: JsonObject) -> str:
     if action == "update_state":
         return f"action update_state milestones={len(data.get('milestones', []))}"
+    if action == "update_project":
+        return "action update_project"
     if action == "mark_task_done":
         return f"action mark_task_done id={data.get('id') or data.get('milestone_id') or ''}"
     if action == "set_phase":
@@ -609,12 +644,36 @@ def summarize_action(action: str, data: JsonObject) -> str:
     return f"action {action}"
 
 
+def action_update_project(root: Path, state: State, data: JsonObject) -> State:
+    if "structure" in data:
+        state["project_structure"] = normalize_optional_list(data.get("structure"))
+    if "tech_stack" in data:
+        state["project_tech_stack"] = normalize_optional_list(data.get("tech_stack")) or ["unknown"]
+    if "test_commands" in data:
+        state["project_test_commands"] = normalize_optional_list(data.get("test_commands")) or ["manual validation"]
+    if data.get("language"):
+        language = str(data.get("language")).strip()
+        if language not in {"auto", "zh", "en"}:
+            raise WorkflowError("update_project data.language must be auto, zh, or en.")
+        state["project_language"] = language
+        update_config(root, language=language)
+    state["updated_at"] = now_iso()
+    write_project_brief(root, state)
+    append_log(root, "updated project brief")
+    return state
+
+
 def action_update_state(root: Path, state: State, data: JsonObject) -> State:
     phase = str(data.get("phase") or "EXECUTING").upper()
     if phase != "EXECUTING":
         raise WorkflowError("update_state must move the workflow to EXECUTING.")
+    config = read_config(root)
+    clarifications = normalize_optional_list(data.get("clarifications"))
+    if config.get("plan_interview", "on") == "on" and not clarifications:
+        raise WorkflowError("update_state requires data.clarifications when plan.interview is on.")
     milestones = normalize_milestones(data.get("milestones"))
     state["started_at"] = state["started_at"] or now_iso()
+    state["clarifications"] = clarifications
     state["milestones"] = milestones
     state["current_milestone_id"] = milestones[0]["id"]
     refresh_progress(state)
@@ -735,8 +794,9 @@ def find_milestone(state: State, milestone_id: str) -> Milestone | None:
 
 
 def write_milestone_report(root: Path, milestone: Milestone, data: JsonObject, kind: str) -> None:
-    reports = root / REPORTS_DIR
-    reports.mkdir(exist_ok=True)
+    cycle = read_state(root).get("cycle", "C0") if (root / "state.yaml").exists() else "C0"
+    reports = root / REPORTS_DIR / str(cycle)
+    reports.mkdir(parents=True, exist_ok=True)
     report_path = reports / f"{milestone['id']}.md"
     lines = [
         f"# {milestone['id']} Report",
@@ -773,6 +833,37 @@ def git_diff_stat(project_root: Path) -> str:
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return result.stdout.strip()
+
+
+def next_cycle_id(cycle_id: str) -> str:
+    match = re.fullmatch(r"C([0-9]+)", cycle_id.strip())
+    if not match:
+        return "C1"
+    return f"C{int(match.group(1)) + 1}"
+
+
+def make_readonly(path: Path) -> None:
+    for item in path.rglob("*"):
+        if item.is_file():
+            item.chmod(0o444)
+        elif item.is_dir():
+            item.chmod(0o555)
+    path.chmod(0o555)
+
+
+def remove_tree(path: Path) -> None:
+    if not path.exists():
+        return
+    for item in path.rglob("*"):
+        try:
+            if item.is_dir():
+                item.chmod(0o755)
+            else:
+                item.chmod(0o644)
+        except OSError:
+            pass
+    path.chmod(0o755)
+    shutil.rmtree(path)
 
 
 def normalize_error_text(value: object, max_length: int = 500) -> str:
@@ -917,7 +1008,48 @@ def list_project_files(project_root: Path) -> list[Path]:
     return result
 
 
-def write_config(root: Path) -> None:
+def read_config(root: Path) -> dict[str, str]:
+    config = {
+        "language": "zh",
+        "plan_interview": "on",
+        "plan_interview_max_rounds": "3",
+        "plan_questions_per_round": "3-5",
+    }
+    config_path = root / "config.yaml"
+    if not config_path.exists():
+        return config
+    section = ""
+    for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" ") and line.endswith(":"):
+            section = line[:-1]
+            continue
+        key_value = match_key_value(line, indent=2)
+        if not key_value:
+            continue
+        key, value = key_value
+        if section == "output" and key == "language":
+            config["language"] = value or "zh"
+        elif section == "plan" and key == "interview":
+            config["plan_interview"] = value or "on"
+        elif section == "plan" and key in {"interview.max_rounds", "max_rounds"}:
+            config["plan_interview_max_rounds"] = value or "3"
+        elif section == "plan" and key in {"interview.questions_per_round", "questions_per_round"}:
+            config["plan_questions_per_round"] = value or "3-5"
+        elif section == "plan" and key == "max_questions":
+            config["plan_questions_per_round"] = f"3-{value or '5'}"
+    return config
+
+
+def write_config(
+    root: Path,
+    language: str = "zh",
+    plan_interview: str = "on",
+    plan_interview_max_rounds: str = "3",
+    plan_questions_per_round: str = "3-5",
+) -> None:
     config_path = root / "config.yaml"
     if not config_path.exists():
         config_path.write_text(
@@ -925,42 +1057,101 @@ def write_config(root: Path) -> None:
             "  name: Mary Workflow\n"
             "  prompt_glob: prompts/*.md\n"
             "output:\n"
-            "  language: auto\n",
+            f"  language: {language}\n"
+            "plan:\n"
+            f"  interview: {plan_interview}\n"
+            f"  interview.max_rounds: {plan_interview_max_rounds}\n"
+            f"  interview.questions_per_round: {quote_value(plan_questions_per_round)}\n",
             encoding="utf-8",
         )
+
+
+def update_config(root: Path, language: str | None = None, plan_interview: str | None = None) -> None:
+    config = read_config(root)
+    if language is not None:
+        config["language"] = language
+    if plan_interview is not None:
+        config["plan_interview"] = plan_interview
+    (root / "config.yaml").write_text(
+        "workflow:\n"
+        "  name: Mary Workflow\n"
+        "  prompt_glob: prompts/*.md\n"
+        "output:\n"
+        f"  language: {config['language']}\n"
+        "plan:\n"
+        f"  interview: {config['plan_interview']}\n"
+        f"  interview.max_rounds: {config['plan_interview_max_rounds']}\n"
+        f"  interview.questions_per_round: {quote_value(config['plan_questions_per_round'])}\n",
+        encoding="utf-8",
+    )
+
+
+def write_project_brief(root: Path, state: State) -> None:
+    brief_path = root / BRIEF_FILE
+    lines = [
+        "# 项目理解简报",
+        "",
+        f"- 生成时间：{now_iso()}",
+        f"- 项目根目录：`{state.get('project_root', '')}`",
+        f"- 当前 cycle：`{state.get('cycle', 'C0')}`",
+        f"- 输出语言：`{state.get('project_language', 'zh')}`",
+        "",
+        "## 技术栈",
+        "",
+        *(f"- {item}" for item in state.get("project_tech_stack", [])),
+        "",
+        "## 测试方式",
+        "",
+        *(f"- `{item}`" for item in state.get("project_test_commands", [])),
+        "",
+        "## 结构摘要",
+        "",
+        *(f"- `{item}`" for item in state.get("project_structure", [])),
+        "",
+        "## 修正方式",
+        "",
+        "如果这份理解不准确，请指出正确事实；Mary Workflow 会通过 `update_project` 信封修正 state 和本简报。",
+    ]
+    brief_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def cmd_init(args: argparse.Namespace) -> int:
     root = workflow_root(Path.cwd())
     if args.reset and root.exists():
-        shutil.rmtree(root)
+        remove_tree(root)
     elif (root / "state.yaml").exists():
         state_text = (root / "state.yaml").read_text(encoding="utf-8")
-        if not re.search(r"^version:\s*2\s*$", state_text, flags=re.MULTILINE):
-            raise SystemExit("Existing Mary Workflow state is not v2. Run /mw-init --reset to recreate it.")
-        print("Mary Workflow is already initialized. Use /mw-init --reset to recreate it.")
-        print_status(read_state(root))
+        if not re.search(r"^version:\s*3\s*$", state_text, flags=re.MULTILINE):
+            raise SystemExit("Existing Mary Workflow state is not v3. Run /mw-init --reset to recreate it.")
+        print("Mary Workflow 已初始化。如需重建，请运行 /mw-init --reset。")
+        print_status(read_state(root), read_config(root).get("language", "zh"))
         return 0
 
     root.mkdir(exist_ok=True)
     (root / PROMPTS_DIR).mkdir(exist_ok=True)
     (root / REPORTS_DIR).mkdir(exist_ok=True)
-    write_config(root)
+    write_config(root, language="zh")
 
     seeded = seed_core_prompts(root)
     examples = write_example_prompts(root) if args.with_examples else 0
     prompts = prompt_files(root)
 
     state = default_state(Path.cwd())
+    config = read_config(root)
+    state["project_language"] = config.get("language", "zh")
     state["phase"] = "PLANNING"
     state["status"] = "idle"
     sync_prompt_for_phase(state, root)
     refresh_progress(state)
     write_state(root, state)
-    append_log(root, "initialized workflow v2")
+    write_project_brief(root, state)
+    append_log(root, "initialized workflow v3")
 
-    print(f"Initialized {WORKFLOW_DIR} v2 with {len(prompts)} prompt(s).")
-    print("Next: /mw-plan")
+    print(f"已初始化 {WORKFLOW_DIR} v3，写入 {len(prompts)} 个 prompt。")
+    print(f"项目理解简报：{root / BRIEF_FILE}")
+    print("请检查简报中的结构、技术栈和测试方式；如有误，请指出，我会用 update_project 信封修正。")
+    print("后续 plan/run 默认使用中文。若希望改为 auto 或 en，请告诉我，我会写入 config.yaml 的 output.language。")
+    print("下一步：/mw-plan")
     if seeded:
         print(f"Seeded {seeded} core prompt(s).")
     if examples:
@@ -968,10 +1159,64 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cycle(args: argparse.Namespace) -> int:
+    root = require_root(Path.cwd())
+    state = read_state(root)
+    old_cycle = str(state.get("cycle") or "C0")
+    new_cycle = next_cycle_id(old_cycle)
+    archive = root / CYCLES_DIR / old_cycle
+    if archive.exists():
+        raise SystemExit(f"Cycle archive already exists: {archive}")
+    archive.mkdir(parents=True)
+
+    for name in ("state.yaml", "log.md"):
+        source = root / name
+        if source.exists():
+            shutil.copy2(source, archive / name)
+
+    reports_root = root / REPORTS_DIR
+    cycle_reports = reports_root / old_cycle
+    if cycle_reports.exists():
+        shutil.copytree(cycle_reports, archive / REPORTS_DIR)
+    elif reports_root.exists():
+        shutil.copytree(reports_root, archive / REPORTS_DIR)
+    if reports_root.exists():
+        shutil.rmtree(reports_root)
+    (root / REPORTS_DIR).mkdir(exist_ok=True)
+    make_readonly(archive)
+
+    state["cycle"] = new_cycle
+    state["status"] = "idle"
+    state["phase"] = "PLANNING"
+    state["started_at"] = ""
+    state["updated_at"] = now_iso()
+    state["current_index"] = 0
+    state["current_milestone_id"] = ""
+    state["milestones"] = []
+    state["clarifications"] = []
+    state["completed"] = 0
+    state["total"] = 0
+    state["lease_owner"] = ""
+    state["lease_milestone_id"] = ""
+    state["lease_started_at"] = ""
+    state["last_error"] = {"command": "", "stderr": "", "returncode": "", "created_at": ""}
+    state["action_counts"] = {action: 0 for action in sorted(PHASE_ACTIONS["PLANNING"] | PHASE_ACTIONS["EXECUTING"] | PHASE_ACTIONS["REVIEWING"] | PHASE_ACTIONS["DEBUGGING"])}
+    state["rejected_actions"] = 0
+    state["phase_history"] = []
+    sync_prompt_for_phase(state, root)
+    write_state(root, state)
+    write_project_brief(root, state)
+    (root / "log.md").write_text("# Mary Workflow Log\n\n", encoding="utf-8")
+    append_log(root, f"cycle {old_cycle} archived; started {new_cycle}")
+    print(f"已归档 {old_cycle} 到 {archive}")
+    print(f"已开启 {new_cycle}。下一步：/mw-plan")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     root = require_root(Path.cwd())
     state = read_state(root)
-    print_status(state)
+    print_status(state, read_config(root).get("language", "zh"))
     return 0
 
 
@@ -979,7 +1224,7 @@ def cmd_apply_action(args: argparse.Namespace) -> int:
     root = require_root(Path.cwd())
     payload = load_json_payload(args)
     state = apply_action(root, payload)
-    print_status(state)
+    print_status(state, read_config(root).get("language", "zh"))
     return 0
 
 
@@ -990,14 +1235,22 @@ def cmd_stop(args: argparse.Namespace) -> int:
     state["updated_at"] = now_iso()
     write_state(root, state)
     append_log(root, "stopped workflow")
-    print_status(state)
+    print_status(state, read_config(root).get("language", "zh"))
     return 0
 
 
-def print_status(state: State) -> None:
+def print_status(state: State, language: str = "zh") -> None:
     milestone = current_milestone(state)
     milestone_id = milestone["id"] if milestone else "(none)"
+    if language == "en":
+        print_status_en(state, milestone, milestone_id)
+    else:
+        print_status_zh(state, milestone, milestone_id)
+
+
+def print_status_en(state: State, milestone: Milestone | None, milestone_id: str) -> None:
     print(f"version: {state['version']}")
+    print(f"cycle: {state.get('cycle', 'C0')}")
     print(f"status: {state['status']}")
     print(f"phase: {state['phase']}")
     print(f"progress: {state['completed']}/{state['total']}")
@@ -1021,8 +1274,34 @@ def print_status(state: State) -> None:
             print(f"  - {entry}")
 
 
+def print_status_zh(state: State, milestone: Milestone | None, milestone_id: str) -> None:
+    print(f"版本: {state['version']}")
+    print(f"cycle: {state.get('cycle', 'C0')}")
+    print(f"状态: {state['status']}")
+    print(f"阶段: {state['phase']}")
+    print(f"进度: {state['completed']}/{state['total']}")
+    print(f"当前 prompt: {state['current_prompt'] or '(none)'}")
+    print(f"当前 milestone: {milestone_id}")
+    if milestone:
+        print(f"标题: {milestone['title']}")
+        print(f"gate: {milestone.get('gate', 'auto')}")
+    milestones = state_milestones(state)
+    if milestones:
+        print("milestones:")
+        for item in milestones:
+            print(f"  - {item['id']} [{item['status']}] scope={item['estimated_scope']} {item['title']}")
+    print(f"被拒信封数: {state.get('rejected_actions', 0)}")
+    print("action_counts:")
+    for action, count in sorted(state.get("action_counts", {}).items()):
+        print(f"  {action}: {count}")
+    if state.get("phase_history"):
+        print("phase_history:")
+        for entry in state["phase_history"]:
+            print(f"  - {entry}")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Mary Workflow v2 runtime helper")
+    parser = argparse.ArgumentParser(description="Mary Workflow v3 runtime helper")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init", help="create or reset .mary-workflow")
@@ -1031,6 +1310,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.set_defaults(func=cmd_init)
 
     subparsers.add_parser("status", help="show status without mutating state").set_defaults(func=cmd_status)
+    subparsers.add_parser("cycle", help="archive current cycle and reset active state").set_defaults(func=cmd_cycle)
 
     action_parser = subparsers.add_parser("apply-action", help="apply AI JSON action to state")
     action_source = action_parser.add_mutually_exclusive_group()

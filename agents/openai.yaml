@@ -1,7 +1,7 @@
 interface:
   display_name: "Mary Workflow"
-  short_description: "Run milestone-based project workflows"
-  default_prompt: "Use $mary-workflow to initialize, plan milestones, and run a local workflow."
+  short_description: "Run cycle-aware milestone workflows"
+  default_prompt: "Use $mary-workflow to initialize, plan milestones, run, inspect status, stop, debug, or archive cycles with /mw-cycle."
 
 policy:
   allow_implicit_invocation: true
