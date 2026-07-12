@@ -34,7 +34,9 @@ v2.1 rejects earlier state contracts. Recreate old workspaces with `/mw-init --r
 
 ## Init Understanding Contract
 
-The machine scanner traverses the complete repository with no file-count or path sampling. It excludes `.git`, `.mary-workflow`, dependency/build/cache directories, symlinks, and binary files. `project.inventory` is the complete authority list and `project.fingerprints` stores SHA-256 records for cycle refresh detection.
+The machine scanner traverses the complete eligible repository with no file-count or path sampling. It excludes `.git`, `.mary-workflow`, dependency/build/cache directories, symlinks, binary/ML artifact suffixes, generated `init.ignore` globs, and project-local `.maryignore` globs. `project.inventory` is the complete authority list after those exclusions. The generated config ignores common data, checkpoint, output, result, run, log, and artifact directories; projects may edit the list, including making it empty. `.maryignore` adds newline-delimited glob patterns; negation rules are not supported.
+
+Existing `state.yaml` is authoritative during ordinary reads. `read_state`, `/mw-status`, action envelopes, and report writes do not scan or hash the repository. Explicit init/cycle/brief operations perform discovery. SHA-256 fingerprints are computed with bounded streaming reads rather than whole-file allocation.
 
 `project.brief_status` uses:
 
@@ -52,7 +54,7 @@ While a PLANNING state lacks a complete brief, legal actions are limited to `sub
 4. one file-ledger record for every inventory path, with non-empty purpose, exports, and consumers;
 5. a non-empty uncertainty list whose records are explicitly `inferred` or `unresolved`.
 
-It also requires build, test, and run evidence. Each evidence record stores the exact command, `passed|failed|skipped`, concrete summary, and duration. Safe skips require an explicit reason; detected commands are candidates, not execution claims.
+It also requires build, test, and run evidence. Each evidence record stores the exact command, `passed|failed|skipped`, concrete summary, and duration. Safe skips require an explicit reason; detected commands are candidates, not execution claims. The runtime validates evidence shape and completeness, not the provenance or truth of an agent-authored command result; the full brief remains the human verification surface.
 
 Three-pass evidence is machine validated:
 
@@ -67,6 +69,8 @@ Successful submission increments `project.brief_version`, stamps the current cyc
 Full ledgers are submitted from `.mary-workflow/analysis/submit-brief.json` through `apply-action --file`; they are not passed as a potentially oversized shell argument. The submitted envelope remains local audit evidence.
 
 At `/mw-cycle`, added/modified/deleted text files are compared against fingerprints. Any change writes exact `project.changed_files`, sets `refresh_required`, and pauses archive. `submit_brief mode=cycle_refresh` must acknowledge that exact list and replace the complete brief; only a subsequent `/mw-cycle` archives state, reports, log, and the brief snapshot.
+
+Ordinary `/mw-init` drift detection runs only in `PLANNING`, `PLANNED`, and `FINISHED`. In `EXECUTING`, `REVIEWING`, or `DEBUGGING`, init refreshes prompts but skips repository drift scanning. A pending `refresh_required` flag is preserved for the next stable boundary and does not replace active-phase or stopped-run legal actions.
 
 ## Phase Graph
 

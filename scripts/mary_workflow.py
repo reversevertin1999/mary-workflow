@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import copy
 from datetime import datetime, timedelta, timezone
+from fnmatch import fnmatchcase
 import hashlib
 import hmac
 import json
@@ -33,6 +34,7 @@ STATE_VERSION = "2.1"
 RUN_GRANT_TTL_SECONDS = 300
 EMPTY_PROJECT_SENTINEL = "(empty repository)"
 VALID_PHASES = {"PLANNING", "PLANNED", "EXECUTING", "REVIEWING", "DEBUGGING", "FINISHED"}
+BRIEF_REFRESH_PHASES = {"PLANNING", "PLANNED", "FINISHED"}
 PHASE_PROMPTS = {
     "PLANNING": "mw-plan.md",
     "PLANNED": "mw-ready.md",
@@ -78,10 +80,24 @@ IGNORED_PROJECT_PARTS = {
 }
 BINARY_SUFFIXES = {
     ".7z", ".a", ".avi", ".bin", ".bmp", ".bz2", ".class", ".dll", ".dylib", ".eot",
-    ".exe", ".gif", ".gz", ".ico", ".jar", ".jpeg", ".jpg", ".lockb", ".mov", ".mp3",
-    ".mp4", ".o", ".obj", ".otf", ".pdf", ".png", ".pyc", ".so", ".tar", ".tiff",
-    ".ttf", ".wav", ".webm", ".webp", ".woff", ".woff2", ".xz", ".zip",
+    ".exe", ".feather", ".gif", ".gz", ".h5", ".hdf5", ".ico", ".jar", ".jpeg", ".jpg",
+    ".joblib", ".lockb", ".mov", ".mp3", ".mp4", ".npy", ".npz", ".o", ".obj", ".onnx",
+    ".otf", ".parquet", ".pb", ".pdf", ".pkl", ".ply", ".png", ".pt", ".pth", ".pyc",
+    ".safetensors", ".so", ".tar", ".tfrecord", ".tiff", ".ttf", ".wav", ".webm", ".webp",
+    ".woff", ".woff2", ".xz", ".zip", ".ckpt",
 }
+DEFAULT_INIT_IGNORE_GLOBS = [
+    "artifacts/**",
+    "checkpoints/**",
+    "data/**",
+    "datasets/**",
+    "logs/**",
+    "output/**",
+    "outputs/**",
+    "results/**",
+    "runs/**",
+    "wandb/**",
+]
 
 Milestone = dict[str, Any]
 State = dict[str, Any]
@@ -115,8 +131,27 @@ def prompt_files(root: Path) -> list[str]:
     return [path.name for path in sorted(prompts.iterdir(), key=prompt_sort_key) if path.is_file() and path.suffix == ".md"]
 
 
-def default_state(project_root: Path | None = None, status: str = "idle") -> State:
-    project = detect_project(project_root or Path.cwd())
+def default_state(
+    project_root: Path | None = None,
+    status: str = "idle",
+    *,
+    scan_project: bool = True,
+) -> State:
+    resolved_root = project_root or Path.cwd()
+    project = (
+        detect_project(resolved_root)
+        if scan_project
+        else {
+            "root": str(resolved_root),
+            "structure": [],
+            "tech_stack": [],
+            "build_commands": [],
+            "test_commands": [],
+            "run_commands": [],
+            "inventory": [],
+            "fingerprints": [],
+        }
+    )
     return {
         "version": STATE_VERSION,
         "cycle": "C0",
@@ -241,7 +276,9 @@ def read_state(root: Path) -> State:
     if not state_path.exists():
         return default_state(root.parent)
 
-    state = default_state(root.parent)
+    # Existing state is authoritative. Project discovery belongs to explicit init/cycle
+    # operations, not to every status read or action envelope.
+    state = default_state(root.parent, scan_project=False)
     state["version"] = ""
     state["project_structure"] = []
     state["project_tech_stack"] = []
@@ -1008,7 +1045,7 @@ def is_action_allowed(state: State, action: str) -> bool:
 def legal_actions_for_state(state: State) -> set[str]:
     phase = str(state.get("phase"))
     brief_status = str(state.get("project_brief_status") or "machine_detected")
-    if brief_status == "refresh_required":
+    if brief_status == "refresh_required" and phase in BRIEF_REFRESH_PHASES:
         return {"submit_brief"}
     if phase == "PLANNING" and brief_status != "complete":
         return {"submit_brief", "update_project"}
@@ -1514,19 +1551,13 @@ def action_submit_brief(root: Path, state: State, data: JsonObject) -> State:
         data.get("analysis_evidence"), inventory_set, list(state.get("project_changed_files", []))
     )
 
-    state["project_structure"] = list(inventory)
-    state["project_inventory"] = list(inventory)
-    state["project_tech_stack"] = list(detected["tech_stack"])
-    state["project_build_commands"] = list(detected["build_commands"])
-    state["project_test_commands"] = list(detected["test_commands"])
-    state["project_run_commands"] = list(detected["run_commands"])
+    apply_project_detection(state, detected)
     state["project_positioning"] = positioning
     state["project_architecture"] = architecture
     state["project_file_ledger"] = ledger
     state["project_uncertainties"] = uncertainties
     state["project_validation"] = validation
     state["project_analysis_evidence"] = analysis_evidence
-    state["project_fingerprints"] = list(detected["fingerprints"])
     state["project_changed_files"] = []
     state["project_brief_status"] = "complete"
     state["project_brief_version"] = parse_int(state.get("project_brief_version"), 0) + 1
@@ -1980,18 +2011,69 @@ def detect_project(project_root: Path) -> dict[str, object]:
     }
 
 
-def list_project_files(project_root: Path) -> list[Path]:
+def apply_project_detection(state: State, detected: dict[str, object]) -> None:
+    inventory = list(detected["inventory"])
+    state["project_root"] = str(detected["root"])
+    state["project_structure"] = list(inventory)
+    state["project_inventory"] = list(inventory)
+    state["project_tech_stack"] = list(detected["tech_stack"])
+    state["project_build_commands"] = list(detected["build_commands"])
+    state["project_test_commands"] = list(detected["test_commands"])
+    state["project_run_commands"] = list(detected["run_commands"])
+    state["project_fingerprints"] = list(detected["fingerprints"])
+
+
+def read_maryignore(project_root: Path) -> list[str]:
+    ignore_path = project_root / ".maryignore"
+    if not ignore_path.exists():
+        return []
+    try:
+        lines = ignore_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    return [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+
+
+def configured_init_ignore_globs(project_root: Path) -> list[str]:
+    root = workflow_root(project_root)
+    configured = read_config(root).get("init_ignore", DEFAULT_INIT_IGNORE_GLOBS)
+    globs = configured if isinstance(configured, list) else DEFAULT_INIT_IGNORE_GLOBS
+    return list(dict.fromkeys([str(item).strip() for item in globs if str(item).strip()] + read_maryignore(project_root)))
+
+
+def matches_init_ignore(relative_path: str, patterns: list[str]) -> bool:
+    normalized = relative_path.replace(os.sep, "/").strip("/")
+    for raw_pattern in patterns:
+        pattern = raw_pattern.replace("\\", "/").strip().strip("/")
+        if not pattern or pattern.startswith("!"):
+            continue
+        if pattern.endswith("/**"):
+            base = pattern[:-3].rstrip("/")
+            if normalized == base or normalized.startswith(f"{base}/"):
+                return True
+        if fnmatchcase(normalized, pattern):
+            return True
+        if "/" not in pattern and any(fnmatchcase(part, pattern) for part in normalized.split("/")):
+            return True
+    return False
+
+
+def list_project_files(project_root: Path, ignore_globs: list[str] | None = None) -> list[Path]:
+    patterns = configured_init_ignore_globs(project_root) if ignore_globs is None else ignore_globs
     result: list[Path] = []
     for current_root, directory_names, file_names in os.walk(project_root, topdown=True, followlinks=False):
         current = Path(current_root)
         directory_names[:] = sorted(
             name
             for name in directory_names
-            if name not in IGNORED_PROJECT_PARTS and not (current / name).is_symlink()
+            if name not in IGNORED_PROJECT_PARTS
+            and not (current / name).is_symlink()
+            and not matches_init_ignore(str((current / name).relative_to(project_root)), patterns)
         )
         for name in sorted(file_names):
             path = current / name
-            if path.is_symlink() or is_binary_file(path):
+            relative_path = str(path.relative_to(project_root))
+            if path.is_symlink() or matches_init_ignore(relative_path, patterns) or is_binary_file(path):
                 continue
             result.append(path)
     return result
@@ -2017,10 +2099,13 @@ def fingerprint_records(project_root: Path, files: list[Path] | None = None) -> 
     records: list[JsonObject] = []
     for path in files if files is not None else list_project_files(project_root):
         try:
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    digest.update(chunk)
         except OSError:
             continue
-        records.append({"path": str(path.relative_to(project_root)), "sha256": digest})
+        records.append({"path": str(path.relative_to(project_root)), "sha256": digest.hexdigest()})
     return records
 
 
@@ -2043,24 +2128,50 @@ def changed_project_files(state: State) -> list[str]:
     return changes
 
 
-def read_config(root: Path) -> dict[str, str]:
-    config = {
+def read_config(root: Path) -> dict[str, Any]:
+    config: dict[str, Any] = {
         "language": "zh",
         "plan_interview": "on",
         "plan_interview_max_rounds": "3",
         "plan_questions_per_round": "3-5",
+        "init_ignore": list(DEFAULT_INIT_IGNORE_GLOBS),
     }
     config_path = root / "config.yaml"
     if not config_path.exists():
         return config
     section = ""
+    subsection = ""
+    found_init_ignore = False
     for raw_line in config_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.rstrip()
         if not line or line.lstrip().startswith("#"):
             continue
         if not line.startswith(" ") and line.endswith(":"):
             section = line[:-1]
+            subsection = ""
             continue
+        init_ignore = re.match(r"^\s{2}ignore:\s*(.*)$", line) if section == "init" else None
+        if init_ignore:
+            raw_ignore = init_ignore.group(1).strip()
+            subsection = "ignore" if not raw_ignore else ""
+            config["init_ignore"] = []
+            found_init_ignore = True
+            if raw_ignore:
+                try:
+                    inline_patterns = json.loads(raw_ignore)
+                except json.JSONDecodeError:
+                    inline_patterns = None
+                if not isinstance(inline_patterns, list) or not all(isinstance(item, str) for item in inline_patterns):
+                    raise SystemExit("config.yaml init.ignore must be a YAML list or an inline JSON string list.")
+                config["init_ignore"] = inline_patterns
+            continue
+        if section == "init" and subsection == "ignore":
+            item = re.match(r"^\s{4}-\s*(.*)$", line)
+            if item:
+                value = parse_scalar(item.group(1))
+                if value:
+                    config["init_ignore"].append(value)
+                continue
         key_value = match_key_value(line, indent=2)
         if not key_value:
             continue
@@ -2075,6 +2186,8 @@ def read_config(root: Path) -> dict[str, str]:
             config["plan_questions_per_round"] = value or "3-5"
         elif section == "plan" and key == "max_questions":
             config["plan_questions_per_round"] = f"3-{value or '5'}"
+    if not found_init_ignore:
+        config["init_ignore"] = list(DEFAULT_INIT_IGNORE_GLOBS)
     return config
 
 
@@ -2084,9 +2197,11 @@ def write_config(
     plan_interview: str = "on",
     plan_interview_max_rounds: str = "3",
     plan_questions_per_round: str = "3-5",
+    init_ignore: list[str] | None = None,
 ) -> None:
     config_path = root / "config.yaml"
     if not config_path.exists():
+        ignore_patterns = DEFAULT_INIT_IGNORE_GLOBS if init_ignore is None else init_ignore
         config_path.write_text(
             "workflow:\n"
             "  name: Mary Workflow\n"
@@ -2096,9 +2211,35 @@ def write_config(
             "plan:\n"
             f"  interview: {plan_interview}\n"
             f"  interview.max_rounds: {plan_interview_max_rounds}\n"
-            f"  interview.questions_per_round: {quote_value(plan_questions_per_round)}\n",
+            f"  interview.questions_per_round: {quote_value(plan_questions_per_round)}\n"
+            "init:\n"
+            "  ignore:\n"
+            + "".join(f"    - {quote_value(pattern)}\n" for pattern in ignore_patterns),
             encoding="utf-8",
         )
+
+
+def ensure_init_ignore_config(root: Path) -> None:
+    config_path = root / "config.yaml"
+    if not config_path.exists():
+        write_config(root)
+        return
+    text = config_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    init_index = next((index for index, line in enumerate(lines) if re.match(r"^init:\s*$", line)), None)
+    ignore_lines = ["  ignore:", *(f"    - {quote_value(pattern)}" for pattern in DEFAULT_INIT_IGNORE_GLOBS)]
+    if init_index is None:
+        separator = [""] if lines and lines[-1] else []
+        config_path.write_text("\n".join([*lines, *separator, "init:", *ignore_lines]) + "\n", encoding="utf-8")
+        return
+    section_end = next(
+        (index for index in range(init_index + 1, len(lines)) if lines[index] and not lines[index].startswith(" ")),
+        len(lines),
+    )
+    if any(re.match(r"^\s{2}ignore:\s*", line) for line in lines[init_index + 1 : section_end]):
+        return
+    lines[section_end:section_end] = ignore_lines
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def update_config(root: Path, language: str | None = None, plan_interview: str | None = None) -> None:
@@ -2116,13 +2257,17 @@ def update_config(root: Path, language: str | None = None, plan_interview: str |
         "plan:\n"
         f"  interview: {config['plan_interview']}\n"
         f"  interview.max_rounds: {config['plan_interview_max_rounds']}\n"
-        f"  interview.questions_per_round: {quote_value(config['plan_questions_per_round'])}\n",
+        f"  interview.questions_per_round: {quote_value(config['plan_questions_per_round'])}\n"
+        "init:\n"
+        "  ignore:\n"
+        + "".join(f"    - {quote_value(pattern)}\n" for pattern in config["init_ignore"]),
         encoding="utf-8",
     )
 
 
 def write_project_brief(root: Path, state: State) -> None:
     brief_path = root / BRIEF_FILE
+    ignore_globs = configured_init_ignore_globs(Path(str(state.get("project_root") or root.parent)))
     positioning = state.get("project_positioning") if isinstance(state.get("project_positioning"), dict) else {}
     architecture = state.get("project_architecture") if isinstance(state.get("project_architecture"), dict) else {}
     analysis = (
@@ -2153,6 +2298,10 @@ def write_project_brief(root: Path, state: State) -> None:
         "",
         "### 候选运行命令",
         *(f"- `{item}`" for item in state.get("project_run_commands", [])),
+        "",
+        "### Inventory 排除规则",
+        *(f"- `{item}`" for item in ignore_globs),
+        "" if ignore_globs else "- （无）",
         "",
         f"### 全量文本文件清单（{len(state.get('project_inventory', []))}）",
         *(f"- `{item}`" for item in state.get("project_inventory", [])),
@@ -2260,10 +2409,14 @@ def cmd_init(args: argparse.Namespace) -> int:
             raise SystemExit("Existing Mary Workflow state is not v2.1. Run /mw-init --reset to recreate it.")
         (root / PROMPTS_DIR).mkdir(exist_ok=True)
         (root / ANALYSIS_DIR).mkdir(exist_ok=True)
+        ensure_init_ignore_config(root)
         refreshed = seed_core_prompts(root, overwrite=True)
         state = read_state(root)
         state_changed = False
-        if state.get("project_brief_status") == "complete":
+        phase = str(state.get("phase") or "PLANNING")
+        brief_status = str(state.get("project_brief_status") or "machine_detected")
+        skipped_active_check = phase not in BRIEF_REFRESH_PHASES
+        if brief_status == "complete" and not skipped_active_check:
             changed_files = changed_project_files(state)
             if changed_files:
                 state["project_brief_status"] = "refresh_required"
@@ -2272,8 +2425,21 @@ def cmd_init(args: argparse.Namespace) -> int:
                 write_state(root, state)
                 write_project_brief(root, state)
                 state_changed = True
+        elif brief_status == "machine_detected" and not skipped_active_check:
+            apply_project_detection(state, detect_project(Path(str(state.get("project_root") or Path.cwd()))))
+            state["updated_at"] = now_iso()
+            write_state(root, state)
+            write_project_brief(root, state)
         append_log(root, f"refreshed {refreshed} core prompts")
-        suffix = "检测到项目变化，brief 已进入 refresh_required。" if state_changed else "state 保持不变。"
+        if skipped_active_check:
+            suffix = f"当前阶段为 {phase}，运行中，跳过简报漂移检查。"
+            append_log(root, f"skipped project brief drift check phase={phase}")
+        elif state_changed:
+            suffix = "检测到项目变化，brief 已进入 refresh_required。"
+        elif brief_status == "machine_detected":
+            suffix = "已按当前 init.ignore 与 .maryignore 刷新机器探测。"
+        else:
+            suffix = "state 保持不变。"
         print(f"Mary Workflow 已初始化，已刷新 {refreshed} 个核心 prompt；{suffix}")
         print_status(state, read_config(root).get("language", "zh"))
         print("下一步：渲染 /mw-init 理解上下文；简报 complete 后才能运行 /mw-plan。")

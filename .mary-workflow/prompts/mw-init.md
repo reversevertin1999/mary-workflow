@@ -21,7 +21,7 @@ Do not plan milestones or edit product files during init understanding.
 ## Pass 1: Full Inventory
 
 1. Use `project.inventory` as the authority list. Do not truncate, sample, or use only a directory tree.
-2. Read every listed file completely. Binary files, dependency directories, `.git`, and `.mary-workflow` are already excluded by the machine scanner.
+2. Read every listed file completely. Binary and ML artifact files, dependency directories, `.git`, `.mary-workflow`, `config.yaml` `init.ignore` globs, and project-root `.maryignore` globs are already excluded by the machine scanner. The remaining inventory is exhaustive.
 3. Produce exactly one ledger record per inventory path:
    - what the file is responsible for;
    - what it exports or provides;

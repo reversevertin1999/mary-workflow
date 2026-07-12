@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +17,10 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from mary_workflow import (  # noqa: E402
     apply_action,
     default_state,
+    fingerprint_records,
+    legal_actions_for_state,
     milestone_plan_signature,
+    read_config,
     read_state,
     remove_tree,
     seed_core_prompts,
@@ -811,6 +816,46 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertTrue((self.root / "prompts/mw-resume.md").exists())
         self.assertEqual((self.root / "state.yaml").read_bytes(), state_before)
 
+    def test_existing_state_read_does_not_scan_the_project(self) -> None:
+        with mock.patch("mary_workflow.detect_project", side_effect=AssertionError("unexpected scan")):
+            state = read_state(self.root)
+        self.assertEqual(state["project_brief_status"], "complete")
+
+    def test_fingerprints_stream_files_without_read_bytes(self) -> None:
+        source = self.project / "streamed.txt"
+        source.write_bytes((b"mary-workflow\n" * 100_000) + b"end")
+        expected = hashlib.sha256(source.read_bytes()).hexdigest()
+        with mock.patch.object(Path, "read_bytes", side_effect=AssertionError("whole-file read")):
+            records = fingerprint_records(self.project, [source])
+        self.assertEqual(records, [{"path": "streamed.txt", "sha256": expected}])
+
+    def test_init_ignore_can_be_explicitly_empty(self) -> None:
+        project = self.project / "no-default-ignore"
+        root = project / ".mary-workflow"
+        root.mkdir(parents=True)
+        (root / "config.yaml").write_text("init:\n  ignore: []\n", encoding="utf-8")
+        (project / "output").mkdir()
+        (project / "output/source.csv").write_text("kept\n", encoding="utf-8")
+        state = default_state(project)
+        self.assertEqual(read_config(root)["init_ignore"], [])
+        self.assertIn("output/source.csv", state["project_inventory"])
+
+    def test_init_during_execution_skips_drift_and_preserves_execution(self) -> None:
+        self.start_execution()
+        (self.project / "runtime-change.txt").write_text("in progress\n", encoding="utf-8")
+        result = self.run_cli("init")
+        state = read_state(self.root)
+        self.assertEqual(state["phase"], "EXECUTING")
+        self.assertEqual(state["project_brief_status"], "complete")
+        self.assertIn("运行中，跳过简报漂移检查", result.stdout)
+
+        state["project_brief_status"] = "refresh_required"
+        state["project_changed_files"] = ["added:runtime-change.txt"]
+        write_state(self.root, state)
+        self.assertEqual(legal_actions_for_state(state), {"mark_task_done", "record_error"})
+        completed = apply_action(self.root, {"action": "mark_task_done", "data": {"id": "milestone-1"}})
+        self.assertEqual(completed["phase"], "REVIEWING")
+
     def test_fresh_init_cli_creates_v21_workspace(self) -> None:
         fresh = self.project / "fresh"
         fresh.mkdir()
@@ -819,6 +864,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
         (fresh / "image.bin").write_bytes(b"\x00\x01binary")
         (fresh / "node_modules").mkdir()
         (fresh / "node_modules/ignored.js").write_text("ignored\n", encoding="utf-8")
+        (fresh / "output").mkdir()
+        (fresh / "output/metrics.csv").write_text("loss\n0.1\n", encoding="utf-8")
+        (fresh / "model.ckpt").write_bytes(b"checkpoint")
+        (fresh / "scratch").mkdir()
+        (fresh / "scratch/debug.json").write_text("{}\n", encoding="utf-8")
+        (fresh / ".maryignore").write_text("scratch/**\n", encoding="utf-8")
         result = subprocess.run(
             [sys.executable, str(REPO_ROOT / "scripts/mary_workflow.py"), "init"],
             cwd=fresh,
@@ -832,10 +883,16 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertEqual(state["version"], "2.1")
         self.assertEqual(state["phase"], "PLANNING")
         self.assertEqual(state["project_brief_status"], "machine_detected")
-        self.assertEqual(len(state["project_inventory"]), 105)
+        self.assertEqual(len(state["project_inventory"]), 106)
         self.assertIn("file_104.txt", state["project_inventory"])
+        self.assertIn(".maryignore", state["project_inventory"])
         self.assertNotIn("image.bin", state["project_inventory"])
+        self.assertNotIn("model.ckpt", state["project_inventory"])
         self.assertNotIn("node_modules/ignored.js", state["project_inventory"])
+        self.assertNotIn("output/metrics.csv", state["project_inventory"])
+        self.assertNotIn("scratch/debug.json", state["project_inventory"])
+        config = read_config(workflow)
+        self.assertIn("output/**", config["init_ignore"])
         self.assertEqual(len(list((workflow / "prompts").glob("*.md"))), 7)
         self.assertTrue((workflow / "analysis").is_dir())
         self.assertIn("继续 /mw-init 理解流程", result.stdout)

@@ -452,3 +452,12 @@ Plan/run authorization boundary fix.
 - `project-brief.md` 升级为五层完整档案，带 brief version、更新时间和 cycle 戳；提交后 CLI 全文输出，`/mw-plan` 加载全文和文件账本。
 - `/mw-cycle` 比较 fingerprints；有新增/修改/删除时进入 `refresh_required` 并暂停归档，增量重读和 `mode=cycle_refresh` 成功后才归档，同时保存 brief 快照。
 - 回归覆盖 105 文件无截断、二进制/依赖排除、账本漏项拒收、brief plan gate、五层全文、CLI 全文展示和 cycle 两阶段刷新。
+
+### v2.1 init scan hardening
+
+- `read_state` 对已有 `state.yaml` 使用懒默认值，不再在 status、信封、报告等普通状态读取中扫描和哈希项目树；只有显式 init/cycle/brief 操作执行探测。
+- SHA-256 改为 1 MiB 分块流式更新，移除 `Path.read_bytes()` 的整文件内存分配。
+- `config.yaml` 新增 `init.ignore` glob 列表，并合并项目根目录 `.maryignore`；默认排除常见 data、checkpoint、output、result、run、log 和 artifact 目录。
+- 二进制快速排除补齐 `.pt`、`.pth`、`.ckpt`、`.npy`、`.npz`、`.ply`、`.safetensors`、ONNX/HDF5/Parquet 等 ML 常用格式。
+- `/mw-init` 只在 `PLANNING`、`PLANNED`、`FINISHED` 检测简报漂移；执行、审查、调试阶段只刷新 prompt 并记录跳过，已有 `refresh_required` 也不会覆盖活动 phase 的合法动作。
+- 回归增加懒读取不调用探测、流式哈希不调用 `read_bytes`、config/.maryignore/ML 文件排除，以及 EXECUTING 中 rerun init 后继续完成 milestone。

@@ -30,5 +30,6 @@ Initialize Mary Workflow in the current project directory.
 4. Follow `mw-init.md`: read the complete text inventory in three passes, run safe build/test/run commands, write the full `submit_brief` envelope to `.mary-workflow/analysis/submit-brief.json`, and apply it with `--file`.
 5. Present the entire generated `.mary-workflow/project-brief.md`, not only its path or a short summary.
 6. Ask whether the user wants later plan/run output in `zh`, `auto`, or `en`; if they answer, apply `update_project` with `language`.
-7. On an existing v2.1 project, refresh prompts and follow `brief_status`: complete briefs are displayed, changed projects require incremental reread, and earlier state contracts require `--reset`.
-8. Tell the user `/mw-plan` is available only after `project_brief_status: complete`.
+7. Treat `config.yaml` `init.ignore` plus project-root `.maryignore` as the scanner exclusion authority; every remaining inventory file must be read.
+8. On an existing v2.1 project, refresh prompts and follow `brief_status`: stable phases detect changes and require incremental reread, active execution phases explicitly skip drift detection, and earlier state contracts require `--reset`.
+9. Tell the user `/mw-plan` is available only after `project_brief_status: complete`.
