@@ -16,6 +16,6 @@ Archive the current cycle into `.mary-workflow/cycles/<cycle>/` and start the ne
    python ~/.codex/skills/mary-workflow/scripts/mary_workflow.py cycle
    ```
 
-3. Report the archive path and new cycle.
-4. Tell the user the next step is `/mw-plan`.
-
+3. If the command reports `refresh_required`, render `mw-init`, perform the incremental reread for every `project.changed_files` entry, apply a complete `submit_brief mode=cycle_refresh`, and run `cycle` again.
+4. Report the archive path, new cycle, and updated project-brief version.
+5. Tell the user the next step is `/mw-plan`.

@@ -16,6 +16,6 @@ Load Mary Workflow's planning phase, run the adaptive interview gate, and create
    ```
 
 2. Treat the rendered output as active instruction context.
-3. Follow persisted interview state: ask only boundary-changing questions, resolve answers, revise when requested, then freeze the exact draft in `PLANNED`. Every default or assumption, including with interview disabled, must be displayed and explicitly confirmed before freezing.
+3. Require `project_brief_status: complete` and use the full rendered project brief/file ledger. Then follow persisted interview state: ask only boundary-changing questions, resolve answers, revise when requested, and freeze the exact draft in `PLANNED`. Every default or assumption, including with interview disabled, must be displayed and explicitly confirmed before freezing.
 4. End after questions or after displaying the frozen plan. `/mw-run` itself confirms and starts that plan.
 5. Do not edit product code, run acceptance commands, invoke `/mw-run`, or emit `start_execution` during planning.

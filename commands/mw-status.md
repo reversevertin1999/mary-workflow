@@ -14,5 +14,5 @@ Show current Mary Workflow state.
    python ~/.codex/skills/mary-workflow/scripts/mw_codex.py mw-status
    ```
 
-2. Report current cycle, phase, interview status/round, final-plan confirmation, lease status/run id, grant purpose/fingerprint, current milestone, action counts, rejected envelope count, and phase history. Never expose a plaintext grant token.
+2. Report project-brief status/version/inventory/change count, current cycle and phase, interview status/round, final-plan confirmation, lease status/run id, grant purpose/fingerprint, current milestone, action counts, rejected envelope count, and phase history. Never expose a plaintext grant token.
 3. Do not mutate `.mary-workflow/state.yaml`.

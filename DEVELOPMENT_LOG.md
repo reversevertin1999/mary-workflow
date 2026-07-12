@@ -436,8 +436,19 @@ Plan/run authorization boundary fix.
 
 验证：
 
-- `python -m unittest discover -s tests -v`：21/21 通过。
+- `python -m unittest discover -s tests -v`：25/25 通过。
 - `python -m py_compile scripts/mary_workflow.py scripts/mw_codex.py` 通过。
 - `.codex-plugin/plugin.json` JSON 校验与 `git diff --check` 通过。
 - 覆盖 nonce 明文不落盘、grant 轮换/重放拒绝、原子启动、stop/resume、debug/review lease 保持、FINISHED/replan/cycle 释放，以及早期/缺失 version 拒载。
 - 剩余信任边界：仓库运行时证明的是“调用者持有 `/mw-run` 渲染 grant”；若要密码学证明由人类而非具备直接进程权限的 agent 发起，必须由 Codex 宿主 slash dispatcher 作为可信签发方。
+
+### v2.1 full-depth init understanding
+
+- 删除 `files[:40]` 与 80 文件上限；机器探测遍历全仓文本文件，只排除版本控制、工作流、依赖/构建/缓存目录、符号链接和二进制。
+- 新增完整 inventory 与 SHA-256 fingerprints，分别作为文件账本覆盖 authority 和 cycle 增量比较基线。
+- 新增 `mw-init.md` 三遍读取协议：全量盘点、入口/配置/核心/测试精读、基于模块证据的全局综合；大仓库使用分层综合但不允许抽样。
+- 新增 `submit_brief` 信封和机器校验：项目定位、架构全景、全量文件账本、非空不确定性、build/test/run 执行证据、三遍分析证据全部必填。
+- brief 未完成时 PLANNING 只接受 `submit_brief` / `update_project`，机器阻止提前进入 interview 或 milestone 规划。
+- `project-brief.md` 升级为五层完整档案，带 brief version、更新时间和 cycle 戳；提交后 CLI 全文输出，`/mw-plan` 加载全文和文件账本。
+- `/mw-cycle` 比较 fingerprints；有新增/修改/删除时进入 `refresh_required` 并暂停归档，增量重读和 `mode=cycle_refresh` 成功后才归档，同时保存 brief 快照。
+- 回归覆盖 105 文件无截断、二进制/依赖排除、账本漏项拒收、brief plan gate、五层全文、CLI 全文展示和 cycle 两阶段刷新。

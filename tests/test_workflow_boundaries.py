@@ -38,6 +38,79 @@ def milestone(index: int = 1) -> dict[str, object]:
     }
 
 
+def brief_payload(
+    inventory: list[str], mode: str = "initial", changed_files: list[str] | None = None
+) -> dict[str, object]:
+    primary = inventory[0]
+    return {
+        "action": "submit_brief",
+        "data": {
+            "mode": mode,
+            "positioning": {
+                "purpose": "Exercise Mary Workflow boundaries.",
+                "audience": "Workflow developers.",
+                "problem": "Provide deterministic test fixtures.",
+                "differentiators": "Uses a complete machine-validated brief.",
+            },
+            "architecture": {
+                "modules": [
+                    {
+                        "name": "fixture",
+                        "responsibility": "Represent the complete test project.",
+                        "files": list(inventory),
+                    }
+                ],
+                "dependency_graph": ["fixture -> workflow tests: supplies state"],
+                "data_flow": ["Test input enters the fixture and is asserted by unittest."],
+                "state_management": ["state.yaml -> apply_action: serialized workflow state"],
+            },
+            "file_ledger": [
+                {
+                    "path": path,
+                    "purpose": f"Fixture file {path}.",
+                    "exports": ["(none discovered)"],
+                    "used_by": ["workflow boundary tests"],
+                }
+                for path in inventory
+            ],
+            "uncertainties": [
+                {
+                    "topic": "Fixture generality",
+                    "status": "inferred",
+                    "detail": "The fixture models protocol behavior rather than a production stack.",
+                }
+            ],
+            "validation": [
+                {
+                    "kind": kind,
+                    "command": f"skipped:no {kind} command in fixture",
+                    "status": "skipped",
+                    "summary": f"No safe {kind} command exists for the empty fixture.",
+                    "duration": "0s",
+                }
+                for kind in ("build", "test", "run")
+            ],
+            "analysis_evidence": {
+                "pass1_inventory_complete": True,
+                "pass2": {
+                    "entrypoints": [primary],
+                    "configuration": [primary],
+                    "core_modules": [primary],
+                    "tests": [primary],
+                },
+                "pass3": {
+                    "synthesis": "The fixture is a single complete module used by protocol tests.",
+                    "module_summaries": [
+                        {"module": "fixture", "summary": "Complete fixture project summary."}
+                    ],
+                    "reread_files": [primary],
+                },
+                "reviewed_changed_files": list(changed_files or []),
+            },
+        },
+    }
+
+
 class WorkflowBoundaryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
@@ -49,6 +122,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         state = default_state(self.project)
         sync_prompt_for_phase(state, self.root)
         write_state(self.root, state)
+        apply_action(self.root, brief_payload(list(state["project_inventory"])))
 
     def tearDown(self) -> None:
         remove_tree(self.root)
@@ -138,6 +212,50 @@ class WorkflowBoundaryTests(unittest.TestCase):
         )
         self.assertIn("completed interview", message)
         self.assertEqual(read_state(self.root)["phase"], "PLANNING")
+
+    def test_incomplete_brief_blocks_planning_and_incomplete_ledger_is_rejected(self) -> None:
+        state = read_state(self.root)
+        state["project_brief_status"] = "machine_detected"
+        write_state(self.root, state)
+
+        message = self.assert_rejected(
+            {
+                "action": "update_interview",
+                "data": {
+                    "mode": "open",
+                    "round": 1,
+                    "anchor": "request",
+                    "uncertainty": "scope",
+                    "questions": ["Q1?", "Q2?", "Q3?"],
+                    "defaults": [],
+                },
+            }
+        )
+        self.assertIn("Legal actions: submit_brief, update_project", message)
+
+        payload = brief_payload(list(state["project_inventory"]))
+        payload["data"]["file_ledger"] = []
+        message = self.assert_rejected(payload)
+        self.assertIn("file_ledger must be a non-empty list", message)
+        self.assertEqual(read_state(self.root)["project_brief_status"], "machine_detected")
+
+    def test_complete_brief_has_five_layers_and_is_loaded_by_plan(self) -> None:
+        brief = (self.root / "project-brief.md").read_text(encoding="utf-8")
+        for heading in (
+            "## 1. 机器探测区",
+            "## 2. 项目定位",
+            "## 3. 架构全景",
+            "## 4. 文件级账本",
+            "## 5. 不确定性清单",
+        ):
+            self.assertIn(heading, brief)
+        self.assertIn("构建、测试与运行复现", brief)
+        self.assertIn("`(empty repository)`", brief)
+
+        rendered = render_prompt(self.project, "mw-plan")
+        self.assertIn("## Project Brief Authority", rendered)
+        self.assertIn("## 4. 文件级账本", rendered)
+        self.assertIn("Fixture file (empty repository).", rendered)
 
     def test_agent_cannot_declare_plan_confirmation(self) -> None:
         self.open_round_one()
@@ -352,6 +470,50 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertEqual(state["phase"], "PLANNING")
         self.assertEqual(state["lease_status"], "none")
         self.assertEqual(state["run_grant_digest"], "")
+
+    def test_cycle_requires_incremental_brief_refresh_before_archive(self) -> None:
+        state = read_state(self.root)
+        state["phase"] = "FINISHED"
+        state["status"] = "completed"
+        write_state(self.root, state)
+        (self.project / "app.py").write_text("def main():\n    return 1\n", encoding="utf-8")
+        first = self.run_cli("cycle")
+        state = read_state(self.root)
+        self.assertEqual(state["cycle"], "C0")
+        self.assertEqual(state["project_brief_status"], "refresh_required")
+        self.assertEqual(state["project_changed_files"], ["added:app.py"])
+        self.assertIn("归档已暂停", first.stdout)
+        self.assertFalse((self.root / "cycles/C0").exists())
+        refresh_context = render_prompt(self.project, "mw-init")
+        self.assertIn("# Mary Init Understanding Phase", refresh_context)
+        self.assertIn("added:app.py", refresh_context)
+
+        state = apply_action(
+            self.root,
+            brief_payload(["app.py"], mode="cycle_refresh", changed_files=["added:app.py"]),
+        )
+        self.assertEqual(state["project_brief_status"], "complete")
+        self.assertEqual(state["project_brief_version"], 2)
+        self.assertEqual(state["project_file_ledger"][0]["path"], "app.py")
+        (self.root / "analysis").mkdir(exist_ok=True)
+        (self.root / "analysis/submit-brief.json").write_text("{}\n", encoding="utf-8")
+
+        second = self.run_cli("cycle")
+        state = read_state(self.root)
+        self.assertEqual(state["cycle"], "C1")
+        self.assertEqual(state["project_brief_status"], "complete")
+        self.assertTrue((self.root / "cycles/C0/state.yaml").exists())
+        self.assertTrue((self.root / "cycles/C0/project-brief.md").exists())
+        self.assertTrue((self.root / "cycles/C0/analysis/submit-brief.json").exists())
+        self.assertIn("已归档 C0", second.stdout)
+
+    def test_submit_brief_cli_displays_the_full_document(self) -> None:
+        payload = brief_payload(["(empty repository)"], mode="correction")
+        result = self.run_cli("apply-action", "--json", json.dumps(payload, ensure_ascii=False))
+        self.assertIn("# 项目理解简报", result.stdout)
+        self.assertIn("## 1. 机器探测区", result.stdout)
+        self.assertIn("## 5. 不确定性清单", result.stdout)
+        self.assertIn("Fixture file (empty repository).", result.stdout)
 
     def test_review_can_return_to_clean_planning(self) -> None:
         self.start_execution()
@@ -644,7 +806,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         target = self.root / "prompts/mw-plan.md"
         target.write_text("stale prompt\n", encoding="utf-8")
         refreshed = seed_core_prompts(self.root, overwrite=True)
-        self.assertEqual(refreshed, 6)
+        self.assertEqual(refreshed, 7)
         self.assertIn("Non-Negotiable Boundary", target.read_text(encoding="utf-8"))
         self.assertTrue((self.root / "prompts/mw-resume.md").exists())
         self.assertEqual((self.root / "state.yaml").read_bytes(), state_before)
@@ -652,6 +814,11 @@ class WorkflowBoundaryTests(unittest.TestCase):
     def test_fresh_init_cli_creates_v21_workspace(self) -> None:
         fresh = self.project / "fresh"
         fresh.mkdir()
+        for index in range(105):
+            (fresh / f"file_{index:03d}.txt").write_text(f"file {index}\n", encoding="utf-8")
+        (fresh / "image.bin").write_bytes(b"\x00\x01binary")
+        (fresh / "node_modules").mkdir()
+        (fresh / "node_modules/ignored.js").write_text("ignored\n", encoding="utf-8")
         result = subprocess.run(
             [sys.executable, str(REPO_ROOT / "scripts/mary_workflow.py"), "init"],
             cwd=fresh,
@@ -664,8 +831,17 @@ class WorkflowBoundaryTests(unittest.TestCase):
         state = read_state(workflow)
         self.assertEqual(state["version"], "2.1")
         self.assertEqual(state["phase"], "PLANNING")
-        self.assertEqual(len(list((workflow / "prompts").glob("*.md"))), 6)
-        self.assertIn("下一步：/mw-plan", result.stdout)
+        self.assertEqual(state["project_brief_status"], "machine_detected")
+        self.assertEqual(len(state["project_inventory"]), 105)
+        self.assertIn("file_104.txt", state["project_inventory"])
+        self.assertNotIn("image.bin", state["project_inventory"])
+        self.assertNotIn("node_modules/ignored.js", state["project_inventory"])
+        self.assertEqual(len(list((workflow / "prompts").glob("*.md"))), 7)
+        self.assertTrue((workflow / "analysis").is_dir())
+        self.assertIn("继续 /mw-init 理解流程", result.stdout)
+        init_context = render_prompt(fresh, "mw-init")
+        self.assertIn("# Mary Init Understanding Phase", init_context)
+        self.assertIn("file_104.txt", init_context)
 
 
 if __name__ == "__main__":

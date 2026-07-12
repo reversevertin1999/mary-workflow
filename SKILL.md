@@ -11,7 +11,7 @@ Mary Workflow v2.1 keeps project-local state in `.mary-workflow/` and drives Cod
 
 User-facing command surface:
 
-- `/mw-init`: create v2.1 state for a new project, or refresh core prompts in an existing v2.1 project without deleting state.
+- `/mw-init`: scan the full text inventory, complete a three-pass evidence-backed understanding, execute safe validation, and submit the five-layer project brief.
 - `/mw-init --reset`: remove and recreate `.mary-workflow/`.
 - `/mw-plan`: persist adaptive interview rounds, freeze the draft, then stop unconfirmed in `PLANNED`.
 - `/mw-run`: confirm the frozen plan, consume a one-time grant, acquire/resume the run lease, then run the automatic phase loop.
@@ -28,12 +28,13 @@ User-facing command surface:
 4. Project understanding corrections use `update_project`; do not hand-edit `state.yaml` or `project-brief.md`.
 5. State updates go through `scripts/mary_workflow.py apply-action`.
 6. Phase/action whitelist is enforced by the runtime:
-   - `PLANNING`: `update_project`, `update_interview`, `update_state`
+   - incomplete brief in `PLANNING`: `submit_brief`, `update_project`
+   - complete brief in `PLANNING`: `submit_brief`, `update_project`, `update_interview`, `update_state`
    - `PLANNED`: `reopen_plan`, `start_execution`
    - `EXECUTING`: `mark_task_done`, `record_error` (`resume_execution` only while stopped)
    - `REVIEWING`: `set_phase`, `record_error` (`resume_execution` only while stopped)
    - `DEBUGGING`: `enqueue_fix_task` (`resume_execution` only while stopped)
-7. `/mw-plan` persists questions before asking, never invents missing answers, freezes the exact draft in `PLANNED`, and ends without editing product files.
+7. `/mw-plan` is blocked until the five-layer project brief is complete; it consumes the full file ledger when asking questions and splitting milestones.
 8. Only a `/mw-run` render contains the plaintext one-time token. `start_execution` atomically confirms the plan and acquires the lease; stop/resume uses a separate single-use grant.
 9. `log.md` stays English for grep and audit stability. User-facing explanations follow `.mary-workflow/config.yaml` `output.language`.
 

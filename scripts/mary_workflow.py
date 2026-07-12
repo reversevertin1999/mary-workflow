@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -25,10 +26,12 @@ from typing import Any
 WORKFLOW_DIR = ".mary-workflow"
 PROMPTS_DIR = "prompts"
 REPORTS_DIR = "reports"
+ANALYSIS_DIR = "analysis"
 BRIEF_FILE = "project-brief.md"
 CYCLES_DIR = "cycles"
 STATE_VERSION = "2.1"
 RUN_GRANT_TTL_SECONDS = 300
+EMPTY_PROJECT_SENTINEL = "(empty repository)"
 VALID_PHASES = {"PLANNING", "PLANNED", "EXECUTING", "REVIEWING", "DEBUGGING", "FINISHED"}
 PHASE_PROMPTS = {
     "PLANNING": "mw-plan.md",
@@ -38,7 +41,7 @@ PHASE_PROMPTS = {
     "DEBUGGING": "mw-debug.md",
 }
 PHASE_ACTIONS = {
-    "PLANNING": {"update_interview", "update_project", "update_state"},
+    "PLANNING": {"submit_brief", "update_interview", "update_project", "update_state"},
     "PLANNED": {"reopen_plan", "start_execution"},
     "EXECUTING": {"mark_task_done", "record_error"},
     "REVIEWING": {"set_phase", "record_error"},
@@ -46,12 +49,13 @@ PHASE_ACTIONS = {
     "FINISHED": set(),
 }
 CORE_PROMPT_ORDER = {
-    "mw-plan.md": 0,
-    "mw-ready.md": 1,
-    "mw-resume.md": 2,
-    "mw-execute.md": 3,
-    "mw-review.md": 4,
-    "mw-debug.md": 5,
+    "mw-init.md": 0,
+    "mw-plan.md": 1,
+    "mw-ready.md": 2,
+    "mw-resume.md": 3,
+    "mw-execute.md": 4,
+    "mw-review.md": 5,
+    "mw-debug.md": 6,
 }
 IGNORED_PROJECT_PARTS = {
     ".git",
@@ -63,8 +67,20 @@ IGNORED_PROJECT_PARTS = {
     ".venv",
     "venv",
     "node_modules",
+    "site-packages",
+    ".tox",
+    ".nox",
+    ".next",
+    ".gradle",
+    "target",
     "dist",
     "build",
+}
+BINARY_SUFFIXES = {
+    ".7z", ".a", ".avi", ".bin", ".bmp", ".bz2", ".class", ".dll", ".dylib", ".eot",
+    ".exe", ".gif", ".gz", ".ico", ".jar", ".jpeg", ".jpg", ".lockb", ".mov", ".mp3",
+    ".mp4", ".o", ".obj", ".otf", ".pdf", ".png", ".pyc", ".so", ".tar", ".tiff",
+    ".ttf", ".wav", ".webm", ".webp", ".woff", ".woff2", ".xz", ".zip",
 }
 
 Milestone = dict[str, Any]
@@ -113,7 +129,22 @@ def default_state(project_root: Path | None = None, status: str = "idle") -> Sta
         "project_language": "zh",
         "project_structure": project["structure"],
         "project_tech_stack": project["tech_stack"],
+        "project_build_commands": project["build_commands"],
         "project_test_commands": project["test_commands"],
+        "project_run_commands": project["run_commands"],
+        "project_inventory": project["inventory"],
+        "project_brief_status": "machine_detected",
+        "project_brief_version": 0,
+        "project_brief_updated_at": "",
+        "project_brief_cycle": "C0",
+        "project_positioning": {},
+        "project_architecture": {},
+        "project_file_ledger": [],
+        "project_uncertainties": [],
+        "project_validation": [],
+        "project_analysis_evidence": {},
+        "project_fingerprints": project["fingerprints"],
+        "project_changed_files": [],
         "interview_status": "not_started",
         "interview_round": 0,
         "interview_max_rounds": 3,
@@ -151,6 +182,7 @@ def default_state(project_root: Path | None = None, status: str = "idle") -> Sta
         "action_counts": {
             "update_interview": 0,
             "update_project": 0,
+            "submit_brief": 0,
             "update_state": 0,
             "reopen_plan": 0,
             "start_execution": 0,
@@ -172,6 +204,13 @@ def parse_scalar(value: str) -> str:
     if value.startswith('"') and value.endswith('"'):
         return value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
     return value
+
+
+def parse_json_scalar(value: str, field_name: str) -> object:
+    try:
+        return json.loads(parse_scalar(value))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Invalid {field_name} in state.yaml: {exc}") from exc
 
 
 def quote_value(value: object) -> str:
@@ -206,7 +245,18 @@ def read_state(root: Path) -> State:
     state["version"] = ""
     state["project_structure"] = []
     state["project_tech_stack"] = []
+    state["project_build_commands"] = []
     state["project_test_commands"] = []
+    state["project_run_commands"] = []
+    state["project_inventory"] = []
+    state["project_file_ledger"] = []
+    state["project_uncertainties"] = []
+    state["project_validation"] = []
+    state["project_fingerprints"] = []
+    state["project_changed_files"] = []
+    state["project_positioning"] = {}
+    state["project_architecture"] = {}
+    state["project_analysis_evidence"] = {}
     state["interview_rounds"] = []
     state["clarifications"] = []
     state["draft_milestones"] = []
@@ -239,12 +289,21 @@ def read_state(root: Path) -> State:
             continue
 
         if section == "project":
-            if re.match(r"^\s{2}(structure|tech_stack|test_commands):\s*$", line):
+            if re.match(
+                r"^\s{2}(structure|tech_stack|build_commands|test_commands|run_commands|inventory|file_ledger|uncertainties|validation|fingerprints|changed_files):\s*$",
+                line,
+            ):
                 subsection = line.strip()[:-1]
                 continue
             list_match = re.match(r"^\s{4}-\s*(.*)$", line)
             if list_match and subsection:
-                state[f"project_{subsection}"].append(parse_scalar(list_match.group(1)))
+                raw_value = list_match.group(1)
+                if subsection in {"file_ledger", "uncertainties", "validation", "fingerprints"}:
+                    value = parse_json_scalar(raw_value, f"project.{subsection}")
+                    if isinstance(value, dict):
+                        state[f"project_{subsection}"].append(value)
+                else:
+                    state[f"project_{subsection}"].append(parse_scalar(raw_value))
                 continue
             key_value = match_key_value(line, indent=2)
             if key_value:
@@ -255,6 +314,18 @@ def read_state(root: Path) -> State:
                     state["project_brief"] = value
                 elif key == "language":
                     state["project_language"] = value
+                elif key == "brief_status":
+                    state["project_brief_status"] = value
+                elif key == "brief_version":
+                    state["project_brief_version"] = parse_int(value)
+                elif key == "brief_updated_at":
+                    state["project_brief_updated_at"] = value
+                elif key == "brief_cycle":
+                    state["project_brief_cycle"] = value
+                elif key in {"positioning", "architecture", "analysis_evidence"}:
+                    parsed = parse_json_scalar(value, f"project.{key}")
+                    if isinstance(parsed, dict):
+                        state[f"project_{key}"] = parsed
             continue
 
         if section == "planning":
@@ -473,13 +544,35 @@ def write_state(root: Path, state: State) -> None:
         f"  root: {quote_value(state['project_root'])}",
         f"  brief: {quote_value(state.get('project_brief', str(Path(WORKFLOW_DIR) / BRIEF_FILE)))}",
         f"  language: {state.get('project_language', 'zh')}",
+        f"  brief_status: {state.get('project_brief_status', 'machine_detected')}",
+        f"  brief_version: {state.get('project_brief_version', 0)}",
+        f"  brief_updated_at: {state.get('project_brief_updated_at', '')}",
+        f"  brief_cycle: {state.get('project_brief_cycle', state.get('cycle', 'C0'))}",
+        f"  positioning: {quote_value(json.dumps(state.get('project_positioning', {}), ensure_ascii=False, separators=(',', ':')))}",
+        f"  architecture: {quote_value(json.dumps(state.get('project_architecture', {}), ensure_ascii=False, separators=(',', ':')))}",
+        f"  analysis_evidence: {quote_value(json.dumps(state.get('project_analysis_evidence', {}), ensure_ascii=False, separators=(',', ':')))}",
         "  structure:",
     ]
     lines.extend(f"    - {quote_value(item)}" for item in state.get("project_structure", []))
     lines.append("  tech_stack:")
     lines.extend(f"    - {quote_value(item)}" for item in state.get("project_tech_stack", []))
+    lines.append("  build_commands:")
+    lines.extend(f"    - {quote_value(item)}" for item in state.get("project_build_commands", []))
     lines.append("  test_commands:")
     lines.extend(f"    - {quote_value(item)}" for item in state.get("project_test_commands", []))
+    lines.append("  run_commands:")
+    lines.extend(f"    - {quote_value(item)}" for item in state.get("project_run_commands", []))
+    lines.append("  inventory:")
+    lines.extend(f"    - {quote_value(item)}" for item in state.get("project_inventory", []))
+    for section_name in ("file_ledger", "uncertainties", "validation", "fingerprints"):
+        lines.append(f"  {section_name}:")
+        lines.extend(
+            f"    - {quote_value(json.dumps(item, ensure_ascii=False, separators=(',', ':')))}"
+            for item in state.get(f"project_{section_name}", [])
+            if isinstance(item, dict)
+        )
+    lines.append("  changed_files:")
+    lines.extend(f"    - {quote_value(item)}" for item in state.get("project_changed_files", []))
     lines.extend(
         [
             "",
@@ -879,6 +972,8 @@ def apply_action(root: Path, payload: JsonObject) -> State:
             state = action_update_interview(root, working_state, data)
         elif action == "update_project":
             state = action_update_project(root, working_state, data)
+        elif action == "submit_brief":
+            state = action_submit_brief(root, working_state, data)
         elif action == "update_state":
             state = action_update_state(root, working_state, data)
         elif action == "reopen_plan":
@@ -912,6 +1007,11 @@ def is_action_allowed(state: State, action: str) -> bool:
 
 def legal_actions_for_state(state: State) -> set[str]:
     phase = str(state.get("phase"))
+    brief_status = str(state.get("project_brief_status") or "machine_detected")
+    if brief_status == "refresh_required":
+        return {"submit_brief"}
+    if phase == "PLANNING" and brief_status != "complete":
+        return {"submit_brief", "update_project"}
     if state.get("status") == "stopped" and phase in {"EXECUTING", "REVIEWING", "DEBUGGING"}:
         return {"resume_execution"}
     return PHASE_ACTIONS.get(phase, set())
@@ -938,6 +1038,8 @@ def summarize_action(action: str, data: JsonObject) -> str:
         return "action resume_execution"
     if action == "update_project":
         return "action update_project"
+    if action == "submit_brief":
+        return f"action submit_brief mode={data.get('mode', '')} ledger={len(data.get('file_ledger', []))}"
     if action == "mark_task_done":
         return f"action mark_task_done id={data.get('id') or data.get('milestone_id') or ''}"
     if action == "set_phase":
@@ -1190,8 +1292,12 @@ def action_update_project(root: Path, state: State, data: JsonObject) -> State:
         state["project_structure"] = normalize_optional_list(data.get("structure"))
     if "tech_stack" in data:
         state["project_tech_stack"] = normalize_optional_list(data.get("tech_stack")) or ["unknown"]
+    if "build_commands" in data:
+        state["project_build_commands"] = normalize_optional_list(data.get("build_commands")) or ["no build command detected"]
     if "test_commands" in data:
         state["project_test_commands"] = normalize_optional_list(data.get("test_commands")) or ["manual validation"]
+    if "run_commands" in data:
+        state["project_run_commands"] = normalize_optional_list(data.get("run_commands")) or ["no run command detected"]
     if data.get("language"):
         language = str(data.get("language")).strip()
         if language not in {"auto", "zh", "en"}:
@@ -1201,6 +1307,237 @@ def action_update_project(root: Path, state: State, data: JsonObject) -> State:
     state["updated_at"] = now_iso()
     write_project_brief(root, state)
     append_log(root, "updated project brief")
+    return state
+
+
+def require_text(value: object, field_name: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise WorkflowError(f"{field_name} must be non-empty.")
+    return text
+
+
+def require_object(value: object, field_name: str) -> JsonObject:
+    if not isinstance(value, dict):
+        raise WorkflowError(f"{field_name} must be an object.")
+    return value
+
+
+def normalize_positioning(value: object) -> JsonObject:
+    data = require_object(value, "submit_brief.data.positioning")
+    return {
+        "purpose": require_text(data.get("purpose"), "positioning.purpose"),
+        "audience": require_text(data.get("audience"), "positioning.audience"),
+        "problem": require_text(data.get("problem"), "positioning.problem"),
+        "differentiators": require_text(data.get("differentiators"), "positioning.differentiators"),
+    }
+
+
+def normalize_brief_architecture(value: object, inventory: set[str]) -> JsonObject:
+    data = require_object(value, "submit_brief.data.architecture")
+    raw_modules = data.get("modules")
+    if not isinstance(raw_modules, list) or not raw_modules:
+        raise WorkflowError("architecture.modules must be a non-empty list.")
+    modules: list[JsonObject] = []
+    for index, item in enumerate(raw_modules, start=1):
+        module = require_object(item, f"architecture.modules[{index}]")
+        files = normalize_string_list(module.get("files"), f"architecture.modules[{index}].files")
+        invalid = [path for path in files if path not in inventory and not path.startswith("(none")]
+        if invalid:
+            raise WorkflowError(f"architecture module references files outside inventory: {', '.join(invalid)}")
+        modules.append(
+            {
+                "name": require_text(module.get("name"), f"architecture.modules[{index}].name"),
+                "responsibility": require_text(
+                    module.get("responsibility"), f"architecture.modules[{index}].responsibility"
+                ),
+                "files": files,
+            }
+        )
+    return {
+        "modules": modules,
+        "dependency_graph": normalize_string_list(data.get("dependency_graph"), "architecture.dependency_graph"),
+        "data_flow": normalize_string_list(data.get("data_flow"), "architecture.data_flow"),
+        "state_management": normalize_string_list(data.get("state_management"), "architecture.state_management"),
+    }
+
+
+def normalize_file_ledger(value: object, expected_inventory: list[str]) -> list[JsonObject]:
+    if not isinstance(value, list) or not value:
+        raise WorkflowError("file_ledger must be a non-empty list covering the full machine inventory.")
+    ledger: list[JsonObject] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value, start=1):
+        record = require_object(item, f"file_ledger[{index}]")
+        path = require_text(record.get("path"), f"file_ledger[{index}].path")
+        if path in seen:
+            raise WorkflowError(f"file_ledger contains duplicate path: {path}")
+        seen.add(path)
+        ledger.append(
+            {
+                "path": path,
+                "purpose": require_text(record.get("purpose"), f"file_ledger[{index}].purpose"),
+                "exports": normalize_string_list(record.get("exports"), f"file_ledger[{index}].exports"),
+                "used_by": normalize_string_list(record.get("used_by"), f"file_ledger[{index}].used_by"),
+            }
+        )
+    expected = set(expected_inventory)
+    missing = sorted(expected - seen)
+    extra = sorted(seen - expected)
+    if missing or extra:
+        details = []
+        if missing:
+            details.append(f"missing={missing}")
+        if extra:
+            details.append(f"extra={extra}")
+        raise WorkflowError("file_ledger must exactly cover machine inventory: " + "; ".join(details))
+    return ledger
+
+
+def normalize_uncertainties(value: object) -> list[JsonObject]:
+    if not isinstance(value, list) or not value:
+        raise WorkflowError("uncertainties must be a non-empty list of inferred or unresolved items.")
+    result: list[JsonObject] = []
+    for index, item in enumerate(value, start=1):
+        record = require_object(item, f"uncertainties[{index}]")
+        status = require_text(record.get("status"), f"uncertainties[{index}].status")
+        if status not in {"inferred", "unresolved"}:
+            raise WorkflowError(f"uncertainties[{index}].status must be inferred or unresolved.")
+        result.append(
+            {
+                "topic": require_text(record.get("topic"), f"uncertainties[{index}].topic"),
+                "status": status,
+                "detail": require_text(record.get("detail"), f"uncertainties[{index}].detail"),
+            }
+        )
+    return result
+
+
+def normalize_validation_evidence(value: object) -> list[JsonObject]:
+    if not isinstance(value, list) or not value:
+        raise WorkflowError("validation must contain build, test, and run evidence.")
+    result: list[JsonObject] = []
+    kinds: set[str] = set()
+    for index, item in enumerate(value, start=1):
+        record = require_object(item, f"validation[{index}]")
+        kind = require_text(record.get("kind"), f"validation[{index}].kind")
+        status = require_text(record.get("status"), f"validation[{index}].status")
+        if kind not in {"build", "test", "run"}:
+            raise WorkflowError(f"validation[{index}].kind must be build, test, or run.")
+        if status not in {"passed", "failed", "skipped"}:
+            raise WorkflowError(f"validation[{index}].status must be passed, failed, or skipped.")
+        kinds.add(kind)
+        result.append(
+            {
+                "kind": kind,
+                "command": require_text(record.get("command"), f"validation[{index}].command"),
+                "status": status,
+                "summary": require_text(record.get("summary"), f"validation[{index}].summary"),
+                "duration": require_text(record.get("duration"), f"validation[{index}].duration"),
+            }
+        )
+    missing = {"build", "test", "run"} - kinds
+    if missing:
+        raise WorkflowError(f"validation is missing evidence kind(s): {', '.join(sorted(missing))}.")
+    return result
+
+
+def normalize_analysis_evidence(value: object, inventory: set[str], changed_files: list[str]) -> JsonObject:
+    data = require_object(value, "submit_brief.data.analysis_evidence")
+    if data.get("pass1_inventory_complete") is not True:
+        raise WorkflowError("analysis_evidence.pass1_inventory_complete must be true.")
+    pass2 = require_object(data.get("pass2"), "analysis_evidence.pass2")
+    normalized_pass2: JsonObject = {}
+    for category in ("entrypoints", "configuration", "core_modules", "tests"):
+        paths = normalize_string_list(pass2.get(category), f"analysis_evidence.pass2.{category}")
+        invalid = [path for path in paths if path not in inventory and not path.startswith("(none")]
+        if invalid:
+            raise WorkflowError(f"analysis_evidence.pass2.{category} references unknown files: {', '.join(invalid)}")
+        normalized_pass2[category] = paths
+    pass3 = require_object(data.get("pass3"), "analysis_evidence.pass3")
+    raw_summaries = pass3.get("module_summaries")
+    if not isinstance(raw_summaries, list) or not raw_summaries:
+        raise WorkflowError("analysis_evidence.pass3.module_summaries must be non-empty.")
+    module_summaries: list[JsonObject] = []
+    for index, item in enumerate(raw_summaries, start=1):
+        summary = require_object(item, f"analysis_evidence.pass3.module_summaries[{index}]")
+        module_summaries.append(
+            {
+                "module": require_text(summary.get("module"), f"module_summaries[{index}].module"),
+                "summary": require_text(summary.get("summary"), f"module_summaries[{index}].summary"),
+            }
+        )
+    reread_files = normalize_string_list(pass3.get("reread_files"), "analysis_evidence.pass3.reread_files")
+    invalid_reread = [path for path in reread_files if path not in inventory and not path.startswith("(none")]
+    if invalid_reread:
+        raise WorkflowError(f"analysis_evidence.pass3.reread_files references unknown files: {', '.join(invalid_reread)}")
+    reviewed_changed_files = normalize_optional_list(data.get("reviewed_changed_files"))
+    if reviewed_changed_files != changed_files:
+        raise WorkflowError(
+            "analysis_evidence.reviewed_changed_files must exactly match project.changed_files for this refresh."
+        )
+    return {
+        "pass1_inventory_complete": True,
+        "pass2": normalized_pass2,
+        "pass3": {
+            "synthesis": require_text(pass3.get("synthesis"), "analysis_evidence.pass3.synthesis"),
+            "module_summaries": module_summaries,
+            "reread_files": reread_files,
+        },
+        "reviewed_changed_files": reviewed_changed_files,
+    }
+
+
+def action_submit_brief(root: Path, state: State, data: JsonObject) -> State:
+    mode = str(data.get("mode") or "").strip()
+    brief_status = str(state.get("project_brief_status") or "machine_detected")
+    expected_mode = "cycle_refresh" if brief_status == "refresh_required" else "initial"
+    if brief_status == "complete":
+        expected_mode = "correction"
+    if mode != expected_mode:
+        raise WorkflowError(f"submit_brief mode must be {expected_mode} while brief_status={brief_status}.")
+    if brief_status == "refresh_required":
+        current_changes = changed_project_files(state)
+        if current_changes != list(state.get("project_changed_files", [])):
+            raise WorkflowError("Project files changed again after cycle scan. Rerun /mw-cycle before submit_brief.")
+
+    project_root = Path(str(state.get("project_root") or root.parent))
+    detected = detect_project(project_root)
+    inventory = list(detected["inventory"])
+    inventory_set = set(inventory)
+    positioning = normalize_positioning(data.get("positioning"))
+    architecture = normalize_brief_architecture(data.get("architecture"), inventory_set)
+    ledger = normalize_file_ledger(data.get("file_ledger"), inventory)
+    uncertainties = normalize_uncertainties(data.get("uncertainties"))
+    validation = normalize_validation_evidence(data.get("validation"))
+    analysis_evidence = normalize_analysis_evidence(
+        data.get("analysis_evidence"), inventory_set, list(state.get("project_changed_files", []))
+    )
+
+    state["project_structure"] = list(inventory)
+    state["project_inventory"] = list(inventory)
+    state["project_tech_stack"] = list(detected["tech_stack"])
+    state["project_build_commands"] = list(detected["build_commands"])
+    state["project_test_commands"] = list(detected["test_commands"])
+    state["project_run_commands"] = list(detected["run_commands"])
+    state["project_positioning"] = positioning
+    state["project_architecture"] = architecture
+    state["project_file_ledger"] = ledger
+    state["project_uncertainties"] = uncertainties
+    state["project_validation"] = validation
+    state["project_analysis_evidence"] = analysis_evidence
+    state["project_fingerprints"] = list(detected["fingerprints"])
+    state["project_changed_files"] = []
+    state["project_brief_status"] = "complete"
+    state["project_brief_version"] = parse_int(state.get("project_brief_version"), 0) + 1
+    state["project_brief_updated_at"] = now_iso()
+    state["project_brief_cycle"] = str(state.get("cycle", "C0"))
+    state["updated_at"] = now_iso()
+    write_project_brief(root, state)
+    append_log(
+        root,
+        f"submitted project brief mode={mode} version={state['project_brief_version']} files={len(ledger)}",
+    )
     return state
 
 
@@ -1585,42 +1922,125 @@ def write_example_prompts(root: Path) -> int:
 def detect_project(project_root: Path) -> dict[str, object]:
     files = list_project_files(project_root)
     tech_stack: list[str] = []
+    build_commands: list[str] = []
     test_commands: list[str] = []
+    run_commands: list[str] = []
     names = {path.name for path in files}
     suffixes = {path.suffix for path in files}
     if ".py" in suffixes or {"pyproject.toml", "requirements.txt", "setup.py"} & names:
         tech_stack.append("python")
         test_commands.append("pytest")
+        if {"pyproject.toml", "setup.py"} & names:
+            build_commands.append("python -m build")
+        if "main.py" in names:
+            run_commands.append("python main.py")
+        if "__main__.py" in names:
+            run_commands.append("python -m <package>")
     if "package.json" in names:
         tech_stack.append("node")
         test_commands.append("npm test")
+        package_path = next((path for path in files if path.name == "package.json"), None)
+        package_scripts: dict[str, object] = {}
+        if package_path:
+            try:
+                package_data = json.loads(package_path.read_text(encoding="utf-8"))
+                if isinstance(package_data, dict) and isinstance(package_data.get("scripts"), dict):
+                    package_scripts = package_data["scripts"]
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                package_scripts = {}
+        if "build" in package_scripts:
+            build_commands.append("npm run build")
+        if "start" in package_scripts:
+            run_commands.append("npm start")
     if "go.mod" in names:
         tech_stack.append("go")
+        build_commands.append("go build ./...")
         test_commands.append("go test ./...")
+        run_commands.append("go run .")
     if "Cargo.toml" in names:
         tech_stack.append("rust")
+        build_commands.append("cargo build")
         test_commands.append("cargo test")
+        run_commands.append("cargo run")
+    if "CMakeLists.txt" in names:
+        tech_stack.append("cmake")
+        build_commands.append("cmake -S . -B build && cmake --build build")
     if not tech_stack:
         tech_stack.append("unknown")
-    structure = [str(path.relative_to(project_root)) for path in files[:40]]
+    inventory = [str(path.relative_to(project_root)) for path in files] or [EMPTY_PROJECT_SENTINEL]
     return {
         "root": str(project_root),
-        "structure": structure,
+        "structure": list(inventory),
         "tech_stack": tech_stack,
+        "build_commands": build_commands or ["no build command detected"],
         "test_commands": test_commands or ["manual validation"],
+        "run_commands": run_commands or ["no run command detected"],
+        "inventory": inventory,
+        "fingerprints": fingerprint_records(project_root, files),
     }
 
 
 def list_project_files(project_root: Path) -> list[Path]:
     result: list[Path] = []
-    for path in sorted(project_root.rglob("*")):
-        if any(part in IGNORED_PROJECT_PARTS for part in path.relative_to(project_root).parts):
-            continue
-        if path.is_file():
+    for current_root, directory_names, file_names in os.walk(project_root, topdown=True, followlinks=False):
+        current = Path(current_root)
+        directory_names[:] = sorted(
+            name
+            for name in directory_names
+            if name not in IGNORED_PROJECT_PARTS and not (current / name).is_symlink()
+        )
+        for name in sorted(file_names):
+            path = current / name
+            if path.is_symlink() or is_binary_file(path):
+                continue
             result.append(path)
-        if len(result) >= 80:
-            break
     return result
+
+
+def is_binary_file(path: Path) -> bool:
+    if path.suffix.lower() in BINARY_SUFFIXES:
+        return True
+    try:
+        with path.open("rb") as handle:
+            probe = handle.read(8192)
+    except OSError:
+        return True
+    if b"\x00" in probe:
+        return True
+    if not probe:
+        return False
+    control_bytes = sum(1 for byte in probe if byte < 9 or 13 < byte < 32)
+    return control_bytes / len(probe) > 0.20
+
+
+def fingerprint_records(project_root: Path, files: list[Path] | None = None) -> list[JsonObject]:
+    records: list[JsonObject] = []
+    for path in files if files is not None else list_project_files(project_root):
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        records.append({"path": str(path.relative_to(project_root)), "sha256": digest})
+    return records
+
+
+def changed_project_files(state: State) -> list[str]:
+    project_root = Path(str(state.get("project_root") or "."))
+    current = {item["path"]: item["sha256"] for item in fingerprint_records(project_root)}
+    previous = {
+        str(item.get("path")): str(item.get("sha256"))
+        for item in state.get("project_fingerprints", [])
+        if isinstance(item, dict) and item.get("path")
+    }
+    changes: list[str] = []
+    for path in sorted(current.keys() - previous.keys()):
+        changes.append(f"added:{path}")
+    for path in sorted(previous.keys() - current.keys()):
+        changes.append(f"deleted:{path}")
+    for path in sorted(current.keys() & previous.keys()):
+        if current[path] != previous[path]:
+            changes.append(f"modified:{path}")
+    return changes
 
 
 def read_config(root: Path) -> dict[str, str]:
@@ -1703,30 +2123,129 @@ def update_config(root: Path, language: str | None = None, plan_interview: str |
 
 def write_project_brief(root: Path, state: State) -> None:
     brief_path = root / BRIEF_FILE
+    positioning = state.get("project_positioning") if isinstance(state.get("project_positioning"), dict) else {}
+    architecture = state.get("project_architecture") if isinstance(state.get("project_architecture"), dict) else {}
+    analysis = (
+        state.get("project_analysis_evidence") if isinstance(state.get("project_analysis_evidence"), dict) else {}
+    )
+    pending = "（等待 `submit_brief` 全量理解结果）"
     lines = [
         "# 项目理解简报",
         "",
-        f"- 生成时间：{now_iso()}",
+        f"- 简报版本：{state.get('project_brief_version', 0)}",
+        f"- 简报状态：`{state.get('project_brief_status', 'machine_detected')}`",
+        f"- 最近更新时间：{state.get('project_brief_updated_at') or now_iso()}",
+        f"- 最近理解 cycle：`{state.get('project_brief_cycle', state.get('cycle', 'C0'))}`",
         f"- 项目根目录：`{state.get('project_root', '')}`",
         f"- 当前 cycle：`{state.get('cycle', 'C0')}`",
         f"- 输出语言：`{state.get('project_language', 'zh')}`",
         "",
-        "## 技术栈",
+        "## 1. 机器探测区",
         "",
+        "### 技术栈",
         *(f"- {item}" for item in state.get("project_tech_stack", [])),
         "",
-        "## 测试方式",
+        "### 候选构建命令",
+        *(f"- `{item}`" for item in state.get("project_build_commands", [])),
         "",
+        "### 候选测试命令",
         *(f"- `{item}`" for item in state.get("project_test_commands", [])),
         "",
-        "## 结构摘要",
+        "### 候选运行命令",
+        *(f"- `{item}`" for item in state.get("project_run_commands", [])),
         "",
-        *(f"- `{item}`" for item in state.get("project_structure", [])),
+        f"### 全量文本文件清单（{len(state.get('project_inventory', []))}）",
+        *(f"- `{item}`" for item in state.get("project_inventory", [])),
         "",
-        "## 修正方式",
+        "### 三遍理解证据",
         "",
-        "如果这份理解不准确，请指出正确事实；Mary Workflow 会通过 `update_project` 信封修正 state 和本简报。",
+        "```json",
+        json.dumps(analysis or {"status": pending}, ensure_ascii=False, indent=2),
+        "```",
+        "",
+        "### 构建、测试与运行复现",
+        "",
     ]
+    validation = [item for item in state.get("project_validation", []) if isinstance(item, dict)]
+    if validation:
+        lines.extend(
+            f"- **{item.get('kind', '')}** `{item.get('command', '')}` → `{item.get('status', '')}`，"
+            f"耗时 {item.get('duration', '')}；{item.get('summary', '')}"
+            for item in validation
+        )
+    else:
+        lines.append(f"- {pending}")
+    lines.extend(
+        [
+            "",
+            "## 2. 项目定位",
+            "",
+            f"- **做什么**：{positioning.get('purpose', pending)}",
+            f"- **给谁用**：{positioning.get('audience', pending)}",
+            f"- **解决的问题**：{positioning.get('problem', pending)}",
+            f"- **与同类差异**：{positioning.get('differentiators', pending)}",
+            "",
+            "## 3. 架构全景",
+            "",
+            "### 模块与职责",
+            "",
+        ]
+    )
+    modules = architecture.get("modules", []) if isinstance(architecture, dict) else []
+    if modules:
+        for module in modules:
+            files = ", ".join(f"`{item}`" for item in module.get("files", []))
+            lines.append(f"- **{module.get('name', '')}**：{module.get('responsibility', '')}；文件：{files}")
+    else:
+        lines.append(f"- {pending}")
+    lines.extend(["", "### 依赖方向邻接表", ""])
+    dependencies = architecture.get("dependency_graph", []) if isinstance(architecture, dict) else []
+    if dependencies:
+        lines.extend(f"- {item}" for item in dependencies)
+    else:
+        lines.append(f"- {pending}")
+    lines.extend(["", "### 关键数据流", ""])
+    data_flow = architecture.get("data_flow", []) if isinstance(architecture, dict) else []
+    if data_flow:
+        lines.extend(f"{index}. {item}" for index, item in enumerate(data_flow, start=1))
+    else:
+        lines.append(f"- {pending}")
+    lines.extend(["", "### 状态存储与修改者", ""])
+    state_flow = architecture.get("state_management", []) if isinstance(architecture, dict) else []
+    if state_flow:
+        lines.extend(f"- {item}" for item in state_flow)
+    else:
+        lines.append(f"- {pending}")
+    lines.extend(["", "## 4. 文件级账本", ""])
+    ledger = [item for item in state.get("project_file_ledger", []) if isinstance(item, dict)]
+    if ledger:
+        for item in ledger:
+            exports = ", ".join(item.get("exports", []))
+            used_by = ", ".join(item.get("used_by", []))
+            lines.append(
+                f"- `{item.get('path', '')}` — {item.get('purpose', '')}；导出：{exports}；被使用：{used_by}"
+            )
+    else:
+        lines.append(f"- {pending}")
+    lines.extend(["", "## 5. 不确定性清单", ""])
+    uncertainties = [item for item in state.get("project_uncertainties", []) if isinstance(item, dict)]
+    if uncertainties:
+        for item in uncertainties:
+            lines.append(f"- **[{item.get('status', '')}] {item.get('topic', '')}**：{item.get('detail', '')}")
+    else:
+        lines.append(f"- {pending}")
+    changed = list(state.get("project_changed_files", []))
+    if changed:
+        lines.extend(["", "## 待增量重读", ""])
+        lines.extend(f"- `{item}`" for item in changed)
+    lines.extend(
+        [
+            "",
+            "## 修正方式",
+            "",
+            "如果理解不准确，请指出证据；机器探测字段用 `update_project` 修正，理解正文用 `submit_brief` 重交。",
+        ]
+    )
     brief_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -1740,16 +2259,30 @@ def cmd_init(args: argparse.Namespace) -> int:
         if not re.search(version_pattern, state_text, flags=re.MULTILINE):
             raise SystemExit("Existing Mary Workflow state is not v2.1. Run /mw-init --reset to recreate it.")
         (root / PROMPTS_DIR).mkdir(exist_ok=True)
+        (root / ANALYSIS_DIR).mkdir(exist_ok=True)
         refreshed = seed_core_prompts(root, overwrite=True)
         state = read_state(root)
+        state_changed = False
+        if state.get("project_brief_status") == "complete":
+            changed_files = changed_project_files(state)
+            if changed_files:
+                state["project_brief_status"] = "refresh_required"
+                state["project_changed_files"] = changed_files
+                state["updated_at"] = now_iso()
+                write_state(root, state)
+                write_project_brief(root, state)
+                state_changed = True
         append_log(root, f"refreshed {refreshed} core prompts")
-        print(f"Mary Workflow 已初始化，已刷新 {refreshed} 个核心 prompt；state 保持不变。")
+        suffix = "检测到项目变化，brief 已进入 refresh_required。" if state_changed else "state 保持不变。"
+        print(f"Mary Workflow 已初始化，已刷新 {refreshed} 个核心 prompt；{suffix}")
         print_status(state, read_config(root).get("language", "zh"))
+        print("下一步：渲染 /mw-init 理解上下文；简报 complete 后才能运行 /mw-plan。")
         return 0
 
     root.mkdir(exist_ok=True)
     (root / PROMPTS_DIR).mkdir(exist_ok=True)
     (root / REPORTS_DIR).mkdir(exist_ok=True)
+    (root / ANALYSIS_DIR).mkdir(exist_ok=True)
     write_config(root, language="zh")
 
     seeded = seed_core_prompts(root)
@@ -1770,9 +2303,9 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     print(f"已初始化 {WORKFLOW_DIR} v2.1，写入 {len(prompts)} 个 prompt。")
     print(f"项目理解简报：{root / BRIEF_FILE}")
-    print("请检查简报中的结构、技术栈和测试方式；如有误，请指出，我会用 update_project 信封修正。")
+    print("机器探测骨架已生成；接下来必须完成三遍全量理解并提交 submit_brief。")
     print("后续 plan/run 默认使用中文。若希望改为 auto 或 en，请告诉我，我会写入 config.yaml 的 output.language。")
-    print("下一步：/mw-plan")
+    print("下一步：继续 /mw-init 理解流程；简报 complete 后再运行 /mw-plan。")
     if seeded:
         print(f"Seeded {seeded} core prompt(s).")
     if examples:
@@ -1783,6 +2316,26 @@ def cmd_init(args: argparse.Namespace) -> int:
 def cmd_cycle(args: argparse.Namespace) -> int:
     root = require_root(Path.cwd())
     state = read_state(root)
+    brief_status = str(state.get("project_brief_status") or "machine_detected")
+    if brief_status not in {"complete", "refresh_required"}:
+        raise SystemExit("Project brief is incomplete. Finish /mw-init and submit_brief before /mw-cycle.")
+    changed_files = changed_project_files(state)
+    if changed_files:
+        state["project_brief_status"] = "refresh_required"
+        state["project_changed_files"] = changed_files
+        state["updated_at"] = now_iso()
+        write_state(root, state)
+        write_project_brief(root, state)
+        append_log(root, f"project brief refresh required files={len(changed_files)}")
+        print("检测到本 cycle 的项目文件变化，归档已暂停。")
+        for item in changed_files:
+            print(f"- {item}")
+        print("请按 /mw-init 的增量重读流程提交 submit_brief mode=cycle_refresh，然后再次运行 /mw-cycle。")
+        return 0
+    if brief_status == "refresh_required":
+        state["project_brief_status"] = "complete"
+        state["project_changed_files"] = []
+
     old_cycle = str(state.get("cycle") or "C0")
     new_cycle = next_cycle_id(old_cycle)
     archive = root / CYCLES_DIR / old_cycle
@@ -1790,7 +2343,7 @@ def cmd_cycle(args: argparse.Namespace) -> int:
         raise SystemExit(f"Cycle archive already exists: {archive}")
     archive.mkdir(parents=True)
 
-    for name in ("state.yaml", "log.md"):
+    for name in ("state.yaml", "log.md", BRIEF_FILE):
         source = root / name
         if source.exists():
             shutil.copy2(source, archive / name)
@@ -1804,6 +2357,12 @@ def cmd_cycle(args: argparse.Namespace) -> int:
     if reports_root.exists():
         shutil.rmtree(reports_root)
     (root / REPORTS_DIR).mkdir(exist_ok=True)
+
+    analysis_root = root / ANALYSIS_DIR
+    if analysis_root.exists():
+        shutil.copytree(analysis_root, archive / ANALYSIS_DIR)
+        shutil.rmtree(analysis_root)
+    analysis_root.mkdir(exist_ok=True)
     make_readonly(archive)
 
     state["cycle"] = new_cycle
@@ -1842,6 +2401,9 @@ def cmd_apply_action(args: argparse.Namespace) -> int:
     root = require_root(Path.cwd())
     payload = load_json_payload(args)
     state = apply_action(root, payload)
+    if payload.get("action") == "submit_brief":
+        print((root / BRIEF_FILE).read_text(encoding="utf-8"))
+        return 0
     print_status(state, read_config(root).get("language", "zh"))
     return 0
 
@@ -1876,6 +2438,10 @@ def print_status_en(state: State, milestone: Milestone | None, milestone_id: str
     print(f"cycle: {state.get('cycle', 'C0')}")
     print(f"status: {state['status']}")
     print(f"phase: {state['phase']}")
+    print(f"project_brief_status: {state.get('project_brief_status', 'machine_detected')}")
+    print(f"project_brief_version: {state.get('project_brief_version', 0)}")
+    print(f"project_inventory_files: {len(state.get('project_inventory', []))}")
+    print(f"project_changed_files: {len(state.get('project_changed_files', []))}")
     print(f"interview_status: {state.get('interview_status', 'not_started')}")
     print(f"interview_round: {state.get('interview_round', 0)}/{state.get('interview_max_rounds', 3)}")
     print(f"final_plan_confirmed: {str(bool(state.get('final_plan_confirmed'))).lower()}")
@@ -1911,6 +2477,10 @@ def print_status_zh(state: State, milestone: Milestone | None, milestone_id: str
     print(f"cycle: {state.get('cycle', 'C0')}")
     print(f"状态: {state['status']}")
     print(f"阶段: {state['phase']}")
+    print(f"项目简报状态: {state.get('project_brief_status', 'machine_detected')}")
+    print(f"项目简报版本: {state.get('project_brief_version', 0)}")
+    print(f"项目 inventory 文件数: {len(state.get('project_inventory', []))}")
+    print(f"待增量重读文件数: {len(state.get('project_changed_files', []))}")
     print(f"问答状态: {state.get('interview_status', 'not_started')}")
     print(f"问答轮次: {state.get('interview_round', 0)}/{state.get('interview_max_rounds', 3)}")
     print(f"最终计划已确认: {str(bool(state.get('final_plan_confirmed'))).lower()}")

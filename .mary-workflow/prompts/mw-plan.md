@@ -12,6 +12,8 @@ You are the planner for Mary Workflow v2.1.
 
 Read `.mary-workflow/state.yaml` first. Planning accepts `PLANNING` and read-only/revision entry from `PLANNED`. If the state is missing, ask the user to run `/mw-init`.
 
+Verify `project.brief_status: complete`. If it differs, stop and require completion of `/mw-init`; do not open interview rounds or construct milestones from an incomplete brief. Use the full rendered `Project Brief Authority`, including its file ledger, when deciding questions and milestone boundaries.
+
 When phase is `PLANNED`, do one of the following:
 
 - If the latest user message requests a plan change, apply `reopen_plan` with that feedback, re-read state, and continue in `PLANNING`.
@@ -175,6 +177,7 @@ The runtime rejects mismatched clarifications, changed milestones, or any attemp
 
 The legal actions in `PLANNING` are:
 
+- `submit_brief` only for a complete evidence-backed brief correction; normal brief work belongs to `/mw-init`
 - `update_project`
 - `update_interview`
 - `update_state`

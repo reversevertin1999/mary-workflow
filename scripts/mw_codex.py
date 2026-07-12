@@ -41,6 +41,8 @@ def prompt_path_for(root: Path, alias: str) -> tuple[str, Path | None]:
     normalized = alias.lstrip("/").strip()
     if normalized == "mw-status":
         return str(state["phase"]), None
+    if normalized == "mw-init":
+        return str(state["phase"]), workflow / PROMPTS_DIR / "mw-init.md"
     if normalized == "mw-run":
         phase = str(state["phase"])
         if phase == "FINISHED":
@@ -63,7 +65,7 @@ def prompt_path_for(root: Path, alias: str) -> tuple[str, Path | None]:
         if phase != "DEBUGGING":
             raise SystemExit(f"/mw-debug requires DEBUGGING, current phase is {phase}.")
         return phase, workflow / PROMPTS_DIR / PHASE_PROMPTS["DEBUGGING"]
-    valid = ", ".join(f"/{name}" for name in ["mw-debug", "mw-plan", "mw-run", "mw-status"])
+    valid = ", ".join(f"/{name}" for name in ["mw-init", "mw-debug", "mw-plan", "mw-run", "mw-status"])
     raise SystemExit(f"Unknown Mary Workflow alias: /{normalized}. Available: {valid}")
 
 
@@ -84,7 +86,7 @@ def render_prompt(root: Path, alias: str) -> str:
         run_grant = issue_run_authorization(workflow)
     state = read_state(workflow)
     state_text = (workflow / "state.yaml").read_text(encoding="utf-8")
-    if normalized == "mw-status" or phase == "FINISHED":
+    if normalized == "mw-status" or (phase == "FINISHED" and normalized != "mw-init"):
         return render_status(normalized, phase, state_text)
 
     if not prompt_path or not prompt_path.exists():
@@ -101,6 +103,7 @@ def render_prompt(root: Path, alias: str) -> str:
         "2. 声明丢弃之前工作记忆，只信任本次渲染的文件系统上下文。\n"
         "3. 只查看当前 milestone 的 `deliverables` 相关文件，review 阶段只看 diff、验收输出和 deliverables。\n\n"
         f"{render_project_snapshot(state)}\n\n"
+        f"{render_project_brief_authority(root, normalized)}\n\n"
         f"{render_interview_context(state)}\n\n"
         f"{render_action_whitelist(state)}\n\n"
         f"{render_plan_confirmation_evidence(state, normalized, phase)}\n\n"
@@ -128,6 +131,8 @@ def render_project_snapshot(state: dict[str, object]) -> str:
     structure = "\n".join(f"- {item}" for item in state.get("project_structure", [])) or "- (empty)"
     tech_stack = ", ".join(state.get("project_tech_stack", [])) or "unknown"
     test_commands = "\n".join(f"- `{item}`" for item in state.get("project_test_commands", [])) or "- `manual validation`"
+    build_commands = "\n".join(f"- `{item}`" for item in state.get("project_build_commands", [])) or "- (none detected)"
+    run_commands = "\n".join(f"- `{item}`" for item in state.get("project_run_commands", [])) or "- (none detected)"
     config = read_config(Path(str(state.get("project_root", "."))) / WORKFLOW_DIR)
     brief_path = Path(str(state.get("project_root", "."))) / WORKFLOW_DIR / BRIEF_FILE
     return (
@@ -135,17 +140,33 @@ def render_project_snapshot(state: dict[str, object]) -> str:
         f"- cycle: `{state.get('cycle', 'C0')}`\n"
         f"- root: `{state.get('project_root', '')}`\n"
         f"- project_brief: `{brief_path}`\n"
+        f"- project_brief_status: `{state.get('project_brief_status', 'machine_detected')}`\n"
+        f"- project_brief_version: `{state.get('project_brief_version', 0)}`\n"
+        f"- inventory_files: `{len(state.get('project_inventory', []))}`\n"
         f"- tech_stack: {tech_stack}\n\n"
         "### Plan Interview\n\n"
         f"- plan.interview: `{config.get('plan_interview', 'on')}`\n"
         f"- plan.interview.max_rounds: `{config.get('plan_interview_max_rounds', '3')}`\n"
         f"- plan.interview.questions_per_round: `{config.get('plan_questions_per_round', '3-5')}`\n"
         "- adaptive_rounds: `small tasks may use 0-1 round; 5+ milestone work may use 2-3 rounds`\n\n"
-        "### Known Test Commands\n\n"
+        "### Detected Build Commands\n\n"
+        f"{build_commands}\n\n"
+        "### Detected Test Commands\n\n"
         f"{test_commands}\n\n"
+        "### Detected Run Commands\n\n"
+        f"{run_commands}\n\n"
         "### Structure Sample\n\n"
         f"{structure}"
     )
+
+
+def render_project_brief_authority(root: Path, alias: str) -> str:
+    if alias not in {"mw-init", "mw-plan"}:
+        return "## Project Brief Authority\n\n(not loaded for this alias)"
+    brief_path = root / WORKFLOW_DIR / BRIEF_FILE
+    if not brief_path.exists():
+        return f"## Project Brief Authority\n\n(missing: `{brief_path}`)"
+    return "## Project Brief Authority\n\n" + brief_path.read_text(encoding="utf-8")
 
 
 def render_action_whitelist(state: dict[str, object]) -> str:
@@ -301,7 +322,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Resolve Mary Workflow v2.1 slash aliases for Codex")
     parser.add_argument(
         "alias",
-        choices=["mw-plan", "mw-run", "mw-debug", "mw-status"],
+        choices=["mw-init", "mw-plan", "mw-run", "mw-debug", "mw-status"],
         help="Slash alias without the leading slash",
     )
     parser.add_argument(
