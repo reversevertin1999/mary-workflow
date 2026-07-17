@@ -461,3 +461,34 @@ Plan/run authorization boundary fix.
 - 二进制快速排除补齐 `.pt`、`.pth`、`.ckpt`、`.npy`、`.npz`、`.ply`、`.safetensors`、ONNX/HDF5/Parquet 等 ML 常用格式。
 - `/mw-init` 只在 `PLANNING`、`PLANNED`、`FINISHED` 检测简报漂移；执行、审查、调试阶段只刷新 prompt 并记录跳过，已有 `refresh_required` 也不会覆盖活动 phase 的合法动作。
 - 回归增加懒读取不调用探测、流式哈希不调用 `read_bytes`、config/.maryignore/ML 文件排除，以及 EXECUTING 中 rerun init 后继续完成 milestone。
+
+## 2026-07-17
+
+v2.2 P0 shared runtime foundation.
+
+Baseline commit: `83ea160` - `P0 finished`
+
+完成内容：
+
+- 新增 `scripts/mw_runtime.py`，集中提供无 workflow phase 知识的公共原语：
+  - 直接、Markdown fenced 和说明文字内嵌三种 JSON payload 解析。
+  - 顶层 JSON object 与 `action`/`data` 信封形状校验。
+  - 同目录临时文件、`O_EXCL`、file `fsync`、`os.replace` 的原子文本写入。
+  - 目标文件权限位保持，以及失败后的临时文件清理。
+  - Markdown 日志文件初始化与 timestamped entry 追加。
+- `scripts/mary_workflow.py` 改为通过兼容适配层调用公共 runtime：
+  - `write_state` 和 cycle 日志重置使用 `atomic_write_text`。
+  - `append_log` 使用 `append_log_entry`。
+  - CLI payload 使用公共 parser 和顶层 object 校验。
+  - `apply_action` 使用 `action_envelope_parts`；`EnvelopeError` 仍路由到原有 `reject_action`，保留 rejected state、计数、日志和 `SystemExit` 行为。
+- 删除 `mary_workflow.py` 中重复的 JSON 扫描与解析实现。
+- runtime 专项测试统一放在 `tests/test_mw_runtime.py`，便于按模块名直接发现。
+- P0 未加入 `/mw-paper`、paper schema、Marp、KaTeX 或其他 P1+ 功能。
+
+验证：
+
+- `python -m unittest discover -s tests -v`：41/41 通过，其中原 v2.1 workflow 边界回归 29/29、P0 runtime 专项 12/12。
+- init 专项 3/3 通过：fresh init、active-phase init、prompt refresh state preservation。
+- 故障注入覆盖 file `fsync` 和 `os.replace` 失败；旧 `state.yaml` 保持完整，临时文件得到清理。
+- state read/write round trip 字节稳定，原 action 预日志顺序与 invalid data rejected path 保持不变。
+- `python -m py_compile`、`git diff --check` 和 P0 范围扫描通过。

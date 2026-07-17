@@ -32,7 +32,7 @@ from mw_runtime import (  # noqa: E402
 )
 
 
-class EnvelopeFoundationTests(unittest.TestCase):
+class EnvelopeRuntimeTests(unittest.TestCase):
     def test_parses_direct_fenced_and_embedded_json(self) -> None:
         expected = {"action": "status"}
         self.assertEqual(parse_json_payload('{"action":"status"}'), expected)
@@ -69,7 +69,7 @@ class EnvelopeFoundationTests(unittest.TestCase):
         self.assertEqual(str(context.exception), "JSON action must be an object.")
 
 
-class PersistenceFoundationTests(unittest.TestCase):
+class PersistenceRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name)
