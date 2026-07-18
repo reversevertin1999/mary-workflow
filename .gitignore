@@ -2,4 +2,3 @@ __pycache__/
 *.py[cod]
 /test/
 .venv/
-.pytest_cache/
