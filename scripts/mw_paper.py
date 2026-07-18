@@ -30,6 +30,9 @@ from mw_paper_sources import (
 )
 from mw_paper_summary import (
     PaperSummaryError,
+    SUMMARY_FILE,
+    SUMMARY_LEDGER_FILE,
+    summary_bundle_fingerprint,
     validate_summary,
     write_summary_context,
 )
@@ -475,8 +478,8 @@ def action_complete_stage(project_root: Path, state: PaperState, data: JsonObjec
             metadata["override_artifact"] = override_artifact
             metadata["override_fingerprint"] = sha256_file(override_path)
     elif stage == "summary":
-        if artifact != "summary.md":
-            raise PaperError("complete_stage summary requires artifact summary.md.")
+        if artifact != SUMMARY_FILE:
+            raise PaperError(f"complete_stage summary requires artifact {SUMMARY_FILE}.")
         read_stage = state["stages"]["read"]
         source_format = str(read_stage["metadata"].get("source_format") or "")
         if source_format not in {"html", "pdf"}:
@@ -491,8 +494,11 @@ def action_complete_stage(project_root: Path, state: PaperState, data: JsonObjec
             )
         except PaperSummaryError as exc:
             raise PaperError(str(exc)) from exc
-        if output_fingerprint != validation["summary_fingerprint"]:
-            raise PaperError("complete_stage summary output_fingerprint does not match summary.md.")
+        if output_fingerprint != validation["summary_bundle_fingerprint"]:
+            raise PaperError(
+                "complete_stage summary output_fingerprint does not match the "
+                "summary.md + summary-ledger.json bundle."
+            )
         metadata = validation["metadata"]
     item.update(
         {
@@ -897,7 +903,8 @@ def cmd_prepare_summary(args: argparse.Namespace) -> int:
     print(f"paper_notes: {workspace / 'paper-notes.md'}")
     print(f"source_locators: {workspace / 'source-locators.json'}")
     print(f"summary_context: {workspace / 'summary-context.json'}")
-    print(f"summary_target: {workspace / 'summary.md'}")
+    print(f"summary_target: {workspace / SUMMARY_FILE}")
+    print(f"summary_ledger_target: {workspace / SUMMARY_LEDGER_FILE}")
     print(
         json.dumps(
             {
@@ -916,9 +923,13 @@ def cmd_prepare_summary(args: argparse.Namespace) -> int:
 def cmd_complete_summary(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root)
     paper_id = resolve_paper_id(project_root, args.paper_id)
-    summary_path = paper_directory(project_root, paper_id) / "summary.md"
+    workspace = paper_directory(project_root, paper_id)
+    summary_path = workspace / SUMMARY_FILE
     if not summary_path.is_file():
-        raise PaperError(f"summary.md is missing: {summary_path}")
+        raise PaperError(f"{SUMMARY_FILE} is missing: {summary_path}")
+    ledger_path = workspace / SUMMARY_LEDGER_FILE
+    if not ledger_path.is_file():
+        raise PaperError(f"{SUMMARY_LEDGER_FILE} is missing: {ledger_path}")
     state = apply_paper_action(
         project_root,
         paper_id,
@@ -926,8 +937,8 @@ def cmd_complete_summary(args: argparse.Namespace) -> int:
             "action": "complete_stage",
             "data": {
                 "stage": "summary",
-                "artifact": "summary.md",
-                "output_fingerprint": sha256_file(summary_path),
+                "artifact": SUMMARY_FILE,
+                "output_fingerprint": summary_bundle_fingerprint(workspace),
             },
         },
     )
@@ -990,7 +1001,7 @@ def build_parser() -> argparse.ArgumentParser:
     summary_prepare_parser.set_defaults(func=cmd_prepare_summary)
 
     summary_complete_parser = subparsers.add_parser(
-        "complete-summary", help="validate summary.md claims and complete the summary stage"
+        "complete-summary", help="validate summary prose and claim ledger, then complete the stage"
     )
     summary_complete_parser.add_argument("--paper-id", help="optional when exactly one paper exists")
     summary_complete_parser.set_defaults(func=cmd_complete_summary)

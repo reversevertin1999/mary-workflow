@@ -17,7 +17,8 @@ The paper pipeline is independent from the v2.1 milestone state machine. It reus
         ├── paper-notes.md
         ├── source-locators.json
         ├── summary-context.json
-        └── summary.md
+        ├── summary.md
+        └── summary-ledger.json
 ```
 
 `/mw-paper` may create this directory before `/mw-init`. The main workflow remains authoritative only through `.mary-workflow/state.yaml`; each paper is authoritative through its own `state.json`. `/mw-init --reset` and `/mw-cycle` do not delete `.mary-research/`, and the v2.1 project scanner excludes it.
@@ -83,7 +84,7 @@ A complete stage must be reset before rerun. Dependencies must be complete befor
 
 The `read` stage has an additional P2 completion gate: `artifact` must be `paper-notes.md`, its byte fingerprint must match `output_fingerprint`, and the ledger must pass `references/paper-notes-contract.md`. A successful read stores parse-quality decision metadata.
 
-The `summary` stage has a P3 completion gate: `artifact` must be `summary.md`; every background/method/experiments claim must pass `references/summary-contract.md`; its evidence and locators must resolve against the current source index. Slides and quiz remain state-only until their implementation milestones.
+The `summary` stage has a P3.5 completion gate: `artifact` remains `summary.md`, while the stage output fingerprint covers both `summary.md` and `summary-ledger.json`. The article must pass the three-section and bidirectional-anchor rules; every direct ledger claim must pass `references/summary-contract.md`, and its evidence and locators must resolve against the current source index. Slides and quiz remain state-only until their implementation milestones.
 
 ## Stale Propagation
 

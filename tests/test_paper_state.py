@@ -340,11 +340,15 @@ class PaperCliAndSurfaceTests(unittest.TestCase):
         self.assertIn("# /mw-paper", command)
         self.assertIn("For `read <source>`", command)
         self.assertIn("For `summarize [paper-id]`", command)
+        self.assertIn("summary-ledger.json", command)
+        self.assertIn("coherent article", command)
         self.assertIn("Do not produce slides or quiz artifacts", command)
         self.assertIn("name: paper", skill)
+        self.assertIn("blog-style article", skill)
+        self.assertIn("summary-ledger.json", skill)
         self.assertIn("quiz` depends on `read` and `summary`, not `slides`", skill)
         self.assertIn("paper_state_schema", contract)
-        self.assertTrue(manifest["version"].startswith("2.2.0-alpha.3"))
+        self.assertTrue(manifest["version"].startswith("2.2.0-alpha.4"))
 
     def test_mw_init_reset_does_not_delete_paper_workspaces(self) -> None:
         self.run_cli(

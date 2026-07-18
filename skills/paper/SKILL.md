@@ -1,6 +1,6 @@
 ---
 name: paper
-description: Manage Mary Workflow's v2.2 paper pipeline, perform contract-validated close reading from arXiv HTML/PDF, and produce source-grounded three-part summaries. Use when the user invokes /mw-paper, asks to register or inspect a paper, read a paper closely, summarize a completed paper read, supplies an arXiv id/URL or PDF, or applies paper stage transitions without plan/run authorization.
+description: Manage Mary Workflow's v2.2 paper pipeline, perform contract-validated close reading from arXiv HTML/PDF, and write readable source-grounded paper summaries with separate claim ledgers. Use when the user invokes /mw-paper, asks to register or inspect a paper, read a paper closely, summarize a completed paper read, supplies an arXiv id/URL or PDF, or applies paper stage transitions without plan/run authorization.
 ---
 
 # Mary Workflow: Paper
@@ -32,10 +32,13 @@ Manage independent paper states, close reading, and grounded summaries under `.m
 13. For `/mw-paper summarize [paper-id]`:
    - run `prepare-summary`, specifying `--paper-id` when needed;
    - read `paper-notes.md`, `summary-context.json`, and the relevant spans in `source.md`;
-   - write `summary.md` with ordered background, method, and experiments claim arrays;
-   - copy `inputs` exactly from summary context and use only `allowed_source_locators`;
-   - copy each claim's evidence exactly from a cited source span;
-   - run `complete-summary` and report any rejected claim without weakening the contract.
+   - write `summary.md` as a blog-style article for a peer who has not read the paper, with ordered Background, Method, and Experiments H2 sections;
+   - make Method the longest and most explanatory section: teach the central intuition, mechanism, and information flow instead of listing components, and use LaTeX when equations help;
+   - anchor key factual sentences inline with `[Bxx]`, `[Mxx]`, and `[Exx]` ids;
+   - write the direct-fact ledger separately to `summary-ledger.json`, copy `inputs` exactly from summary context, and use only `allowed_source_locators`;
+   - keep interpretations, intuition, and connective reasoning in the article without inventing ledger claims; leave unresolved matters in P2 uncertainties for later expert Q&A;
+   - copy each ledger claim's evidence exactly from a cited source span and do not add `direct`/`inferred` labels;
+   - run `complete-summary` and report any body, anchor, locator, or evidence rejection without weakening the contract.
 14. Do not generate `slides.md` or `quiz-log.md`; those stages are not implemented yet.
 
 Read `references/paper-notes-contract.md` before producing notes and `references/summary-contract.md` before producing a summary. See `references/paper-state-contract.md` for state transitions.

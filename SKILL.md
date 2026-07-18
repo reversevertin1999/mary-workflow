@@ -1,6 +1,6 @@
 ---
 name: mary-workflow
-description: Run Mary Workflow's v2.1 milestone engine from `.mary-workflow/` and v2.2 research-paper pipeline from `.mary-research/`, including contract-validated close reading and source-grounded summaries. Use when the user invokes `/mw-init`, `/mw-plan`, `/mw-run`, `/mw-status`, `/mw-stop`, `/mw-debug`, `/mw-cycle`, `/mw-paper`, asks to run Mary workflow, manage paper state, read a research paper closely, or summarize a completed paper read.
+description: Run Mary Workflow's v2.1 milestone engine from `.mary-workflow/` and v2.2 research-paper pipeline from `.mary-research/`, including contract-validated close reading and readable source-grounded summaries with separate claim ledgers. Use when the user invokes `/mw-init`, `/mw-plan`, `/mw-run`, `/mw-status`, `/mw-stop`, `/mw-debug`, `/mw-cycle`, `/mw-paper`, asks to run Mary workflow, manage paper state, read a research paper closely, or summarize a completed paper read.
 ---
 
 # Mary Workflow
@@ -19,7 +19,7 @@ User-facing command surface:
 - `/mw-stop`: pause while preserving state, logs, reports, and cycle.
 - `/mw-debug`: manually load debug phase when the workflow is in `DEBUGGING`.
 - `/mw-cycle`: archive the current cycle to `.mary-workflow/cycles/<cycle>/`, reset active short-term state, and point back to `/mw-plan`.
-- `/mw-paper`: manage independent paper states, produce validated `paper-notes.md`, and create grounded `summary.md` without plan/run authorization.
+- `/mw-paper`: manage independent paper states, produce validated `paper-notes.md`, and create readable `summary.md` plus a grounded `summary-ledger.json` without plan/run authorization.
 
 ## Runtime Rules
 

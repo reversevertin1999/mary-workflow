@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Summary artifact contract and claim validation for Mary papers."""
+"""Readable summary artifacts and grounded claim validation for Mary papers."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -21,18 +22,28 @@ from mw_paper_sources import extract_notes_ledger, sha256_file
 from mw_runtime import atomic_write_text
 
 
-SUMMARY_SCHEMA = 1
+SUMMARY_LEDGER_SCHEMA = 1
 SUMMARY_CONTEXT_SCHEMA = 1
 SUMMARY_FILE = "summary.md"
+SUMMARY_LEDGER_FILE = "summary-ledger.json"
 SUMMARY_CONTEXT_FILE = "summary-context.json"
 SUMMARY_SECTIONS = ("background", "method", "experiments")
 CLAIM_PREFIXES = {"background": "B", "method": "M", "experiments": "E"}
+PREFIX_SECTIONS = {prefix: section for section, prefix in CLAIM_PREFIXES.items()}
+SECTION_HEADING_ALIASES = {
+    "background": {"background", "背景", "背景 / background", "背景（background）"},
+    "method": {"method", "方法", "方法 / method", "方法（method）"},
+    "experiments": {"experiments", "实验", "实验 / experiments", "实验（experiments）"},
+}
+SECTION_HEADING_PATTERN = re.compile(r"^##[ \t]+(.+?)[ \t]*#*[ \t]*$", flags=re.MULTILINE)
+BODY_CLAIM_REF_PATTERN = re.compile(r"\[([A-Z][0-9]{2,})\]")
+CLAIM_ID_PATTERN = re.compile(r"([BME])([0-9]{2,})")
 
 JsonObject = dict[str, Any]
 
 
 class PaperSummaryError(ValueError):
-    """A summary input, claim, or artifact violated the P3 contract."""
+    """A summary input, claim, or artifact violated the P3.5 contract."""
 
 
 def require_summary_string(value: object, field: str) -> str:
@@ -42,21 +53,31 @@ def require_summary_string(value: object, field: str) -> str:
     return text
 
 
-def extract_summary_ledger(summary_text: str) -> JsonObject:
-    marker = "<!-- mary-summary:v1 -->"
-    marker_index = summary_text.find(marker)
-    if marker_index < 0:
-        raise PaperSummaryError(f"summary.md must contain {marker}.")
-    fenced = re.search(r"```json\s*(\{.*?\})\s*```", summary_text[marker_index:], flags=re.DOTALL)
-    if fenced is None:
-        raise PaperSummaryError("summary.md must contain a fenced JSON ledger after the schema marker.")
+def load_summary_ledger(path: Path) -> JsonObject:
+    if not path.is_file():
+        raise PaperSummaryError(f"{SUMMARY_LEDGER_FILE} is missing.")
     try:
-        payload = json.loads(fenced.group(1))
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise PaperSummaryError(f"summary JSON ledger is invalid: {exc}") from exc
+        raise PaperSummaryError(f"{SUMMARY_LEDGER_FILE} is invalid: {exc}") from exc
     if not isinstance(payload, dict):
-        raise PaperSummaryError("summary JSON ledger must be an object.")
+        raise PaperSummaryError(f"{SUMMARY_LEDGER_FILE} must contain a JSON object.")
     return payload
+
+
+def summary_bundle_fingerprint(workspace: Path) -> str:
+    """Fingerprint the exact bytes of both summary-stage output artifacts."""
+    directory = Path(workspace)
+    digest = hashlib.sha256()
+    digest.update(b"mary-summary-bundle:v1\n")
+    for filename in (SUMMARY_FILE, SUMMARY_LEDGER_FILE):
+        data = (directory / filename).read_bytes()
+        encoded_name = filename.encode("utf-8")
+        digest.update(len(encoded_name).to_bytes(4, "big"))
+        digest.update(encoded_name)
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
 
 
 def validate_notes_input(workspace: Path, paper_id: str, read_output_fingerprint: str) -> JsonObject:
@@ -181,20 +202,20 @@ def validate_claim(
     value: object,
     *,
     field: str,
-    section: str,
     source_format: str,
     blocks: dict[str, list[JsonObject]],
     allowed_locators: set[str],
-) -> tuple[str, list[str]]:
+) -> tuple[str, str, list[str]]:
     if not isinstance(value, dict):
         raise PaperSummaryError(f"{field} must be a claim object.")
     expected_fields = {"claim_id", "claim_text", "evidence", "source_locators"}
     if set(value) != expected_fields:
         raise PaperSummaryError(f"{field} must contain exactly: {', '.join(sorted(expected_fields))}.")
     claim_id = require_summary_string(value.get("claim_id"), f"{field}.claim_id")
-    prefix = CLAIM_PREFIXES[section]
-    if not re.fullmatch(rf"{prefix}[0-9]{{2,}}", claim_id):
-        raise PaperSummaryError(f"{field}.claim_id must match {prefix} followed by at least two digits.")
+    identifier = CLAIM_ID_PATTERN.fullmatch(claim_id)
+    if identifier is None:
+        raise PaperSummaryError(f"{field}.claim_id must match Bxx, Mxx, or Exx with at least two digits.")
+    section = PREFIX_SECTIONS[identifier.group(1)]
     claim_text = require_summary_string(value.get("claim_text"), f"{field}.claim_text")
     if len(claim_text) < 10:
         raise PaperSummaryError(f"{field}.claim_text must contain at least 10 characters.")
@@ -217,7 +238,86 @@ def validate_claim(
         )
     if not evidence_resolves(evidence, locators, blocks):
         raise PaperSummaryError(f"{field}.evidence does not resolve under its cited source locators.")
-    return claim_id, locators
+    return claim_id, section, locators
+
+
+def canonical_section_heading(value: str) -> str | None:
+    normalized = " ".join(value.strip().split()).casefold()
+    for section, aliases in SECTION_HEADING_ALIASES.items():
+        if normalized in aliases:
+            return section
+    return None
+
+
+def parse_blog_sections(summary_text: str) -> dict[str, str]:
+    embedded_ledger_tokens = (
+        "<!-- mary-summary:v1 -->",
+        '"summary_schema"',
+        '"summary_ledger_schema"',
+    )
+    if any(token in summary_text for token in embedded_ledger_tokens):
+        raise PaperSummaryError(
+            "summary.md must be blog prose only; move the machine ledger to summary-ledger.json."
+        )
+    headings = list(SECTION_HEADING_PATTERN.finditer(summary_text))
+    sections: dict[str, str] = {}
+    order: list[str] = []
+    for index, heading in enumerate(headings):
+        section = canonical_section_heading(heading.group(1))
+        if section is None:
+            raise PaperSummaryError(
+                "summary.md may contain only Background/背景, Method/方法, and Experiments/实验 H2 headings."
+            )
+        if section in sections:
+            raise PaperSummaryError(f"summary.md contains a duplicate {section} section heading.")
+        body_end = headings[index + 1].start() if index + 1 < len(headings) else len(summary_text)
+        body = summary_text[heading.end() : body_end].strip()
+        if not body:
+            raise PaperSummaryError(f"summary.md section {section} must be non-empty.")
+        sections[section] = body
+        order.append(section)
+    if tuple(order) != SUMMARY_SECTIONS:
+        raise PaperSummaryError(
+            f"summary.md H2 sections must be ordered exactly: {', '.join(SUMMARY_SECTIONS)}."
+        )
+    return sections
+
+
+def validate_body_anchors(
+    sections: dict[str, str], claim_sections: dict[str, str]
+) -> tuple[dict[str, int], dict[str, int]]:
+    reference_counts = {claim_id: 0 for claim_id in claim_sections}
+    section_anchor_counts: dict[str, int] = {}
+    for section in SUMMARY_SECTIONS:
+        section_anchor_counts[section] = 0
+        expected_prefix = CLAIM_PREFIXES[section]
+        for line_number, line in enumerate(sections[section].splitlines(), start=1):
+            references = BODY_CLAIM_REF_PATTERN.findall(line)
+            if not references:
+                continue
+            prose = BODY_CLAIM_REF_PATTERN.sub("", line)
+            prose = re.sub(r"[`*_>#-]", "", prose).strip()
+            if len(prose) < 8:
+                raise PaperSummaryError(
+                    f"summary.md {section} line {line_number} has an isolated claim anchor; "
+                    "place it inline with a factual sentence."
+                )
+            for claim_id in references:
+                if claim_id not in claim_sections:
+                    raise PaperSummaryError(f"summary.md references unknown claim_id {claim_id}.")
+                if not claim_id.startswith(expected_prefix):
+                    raise PaperSummaryError(
+                        f"summary.md claim anchor {claim_id} is in {section}, but its prefix belongs to "
+                        f"{claim_sections[claim_id]}."
+                    )
+                reference_counts[claim_id] += 1
+                section_anchor_counts[section] += 1
+    missing = sorted(claim_id for claim_id, count in reference_counts.items() if count == 0)
+    if missing:
+        raise PaperSummaryError(
+            f"Every summary-ledger claim_id must be cited in summary.md; missing: {', '.join(missing)}."
+        )
+    return reference_counts, section_anchor_counts
 
 
 def validate_summary(
@@ -231,7 +331,9 @@ def validate_summary(
     directory = Path(workspace)
     summary_path = directory / SUMMARY_FILE
     if not summary_path.is_file():
-        raise PaperSummaryError("summary.md is missing.")
+        raise PaperSummaryError(f"{SUMMARY_FILE} is missing.")
+    ledger_path = directory / SUMMARY_LEDGER_FILE
+    ledger = load_summary_ledger(ledger_path)
     context, blocks, context_fingerprint = validate_summary_context(
         directory,
         paper_id=paper_id,
@@ -239,51 +341,69 @@ def validate_summary(
         source_fingerprint=source_fingerprint,
         read_output_fingerprint=read_output_fingerprint,
     )
-    ledger = extract_summary_ledger(summary_path.read_text(encoding="utf-8"))
-    expected_top_level = {"summary_schema", "paper_id", "inputs", "sections"}
+    expected_top_level = {"summary_ledger_schema", "paper_id", "inputs", "claims"}
     if set(ledger) != expected_top_level:
         missing = sorted(expected_top_level - set(ledger))
         extra = sorted(set(ledger) - expected_top_level)
-        raise PaperSummaryError(f"summary top-level fields mismatch; missing={missing}, extra={extra}.")
-    if ledger.get("summary_schema") != SUMMARY_SCHEMA:
-        raise PaperSummaryError(f"summary_schema must be {SUMMARY_SCHEMA}.")
+        raise PaperSummaryError(
+            f"summary-ledger top-level fields mismatch; missing={missing}, extra={extra}."
+        )
+    if ledger.get("summary_ledger_schema") != SUMMARY_LEDGER_SCHEMA:
+        raise PaperSummaryError(f"summary_ledger_schema must be {SUMMARY_LEDGER_SCHEMA}.")
     if ledger.get("paper_id") != paper_id:
-        raise PaperSummaryError("summary paper_id does not match the paper state.")
+        raise PaperSummaryError("summary-ledger paper_id does not match the paper state.")
     if ledger.get("inputs") != context["inputs"]:
-        raise PaperSummaryError("summary inputs must exactly copy summary-context.json.")
+        raise PaperSummaryError("summary-ledger inputs must exactly copy summary-context.json.")
 
-    sections = ledger.get("sections")
-    if not isinstance(sections, dict) or tuple(sections) != SUMMARY_SECTIONS:
-        raise PaperSummaryError(f"summary sections must be ordered exactly: {', '.join(SUMMARY_SECTIONS)}.")
+    claims = ledger.get("claims")
+    if not isinstance(claims, list) or not claims:
+        raise PaperSummaryError("summary-ledger claims must be a non-empty array.")
     allowed_locators = set(context["allowed_source_locators"])
-    claim_ids: set[str] = set()
-    section_counts: JsonObject = {}
+    claim_sections: dict[str, str] = {}
+    section_counts = {section: 0 for section in SUMMARY_SECTIONS}
     cited_locators: set[str] = set()
-    for section in SUMMARY_SECTIONS:
-        claims = sections.get(section)
-        if not isinstance(claims, list) or not claims:
-            raise PaperSummaryError(f"summary section {section} must be a non-empty claim array.")
-        section_counts[section] = len(claims)
-        for index, claim in enumerate(claims):
-            claim_id, locators = validate_claim(
-                claim,
-                field=f"sections.{section}[{index}]",
-                section=section,
-                source_format=source_format,
-                blocks=blocks,
-                allowed_locators=allowed_locators,
-            )
-            if claim_id in claim_ids:
-                raise PaperSummaryError(f"Duplicate summary claim_id: {claim_id}.")
-            claim_ids.add(claim_id)
-            cited_locators.update(locators)
+    for index, claim in enumerate(claims):
+        claim_id, section, locators = validate_claim(
+            claim,
+            field=f"claims[{index}]",
+            source_format=source_format,
+            blocks=blocks,
+            allowed_locators=allowed_locators,
+        )
+        if claim_id in claim_sections:
+            raise PaperSummaryError(f"Duplicate summary claim_id: {claim_id}.")
+        claim_sections[claim_id] = section
+        section_counts[section] += 1
+        cited_locators.update(locators)
+    empty_claim_sections = [section for section, count in section_counts.items() if count == 0]
+    if empty_claim_sections:
+        raise PaperSummaryError(
+            "summary-ledger requires at least one direct claim for each section; missing: "
+            + ", ".join(empty_claim_sections)
+            + "."
+        )
+
+    summary_text = summary_path.read_text(encoding="utf-8")
+    body_sections = parse_blog_sections(summary_text)
+    reference_counts, section_anchor_counts = validate_body_anchors(body_sections, claim_sections)
+    body_section_characters = {
+        section: len(re.sub(r"\s+", "", BODY_CLAIM_REF_PATTERN.sub("", body_sections[section])))
+        for section in SUMMARY_SECTIONS
+    }
 
     return {
-        "summary_fingerprint": sha256_file(summary_path),
+        "summary_bundle_fingerprint": summary_bundle_fingerprint(directory),
         "metadata": {
-            "summary_schema": SUMMARY_SCHEMA,
-            "claim_count": len(claim_ids),
+            "summary_ledger_schema": SUMMARY_LEDGER_SCHEMA,
+            "summary_body_artifact": SUMMARY_FILE,
+            "summary_body_fingerprint": sha256_file(summary_path),
+            "summary_ledger_artifact": SUMMARY_LEDGER_FILE,
+            "summary_ledger_fingerprint": sha256_file(ledger_path),
+            "claim_count": len(claim_sections),
             "section_claim_counts": section_counts,
+            "body_claim_reference_count": sum(reference_counts.values()),
+            "section_anchor_counts": section_anchor_counts,
+            "body_section_characters": body_section_characters,
             "cited_locator_count": len(cited_locators),
             "summary_context": SUMMARY_CONTEXT_FILE,
             "summary_context_fingerprint": context_fingerprint,

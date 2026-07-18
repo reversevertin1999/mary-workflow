@@ -576,3 +576,27 @@ Baseline commit: `4603b01` - `P2 test finished`
 - 真实 arXiv `2401.00001` 的 P2 `source.md` 内存索引通过：137 个 locator、141 个 spans、4 个重复 locator，抽样 evidence 可在对应 span 中解析。
 - `python -m py_compile`、paper skill validator、plugin validator、manifest JSON、`git diff --check`、下游产物范围扫描和 README 零差异检查通过。
 - plugin cachebuster 更新为 `2.2.0-alpha.3+codex.20260718083702`；当前 Codex CLI 无 `plugin add` 子命令，现有 skill/plugin 安装均通过符号链接直接指向本仓库。
+
+### v2.2 P3.5 readable summary layer
+
+Baseline commit: `a834764` - `P3 finished`
+
+完成内容：
+
+- 保留 P3 的 source locator index、summary context、paper-notes allowlist、evidence span containment 和 summary 状态机衔接，移除 `summary.md` 内嵌 JSON 填表格式。
+- summary 阶段改为双文件产物：`summary.md` 只承载面向未读论文同行的博客体正文，`summary-ledger.json` 单独承载机器 claim 账本。
+- 正文强制按 Background/背景、Method/方法、Experiments/实验三个 H2 顺序组织且内容非空；编排 prompt 要求方法节成为篇幅和解释重心，讲清直觉、机制与信息流，并允许使用 LaTeX 公式。
+- claim ledger 固定为 `summary_ledger_schema: 1`、paper id、原样复制的 inputs 和扁平 claims 数组；每条 claim 仍严格使用 `claim_id`、`claim_text`、`evidence`、`source_locators` 四元组。
+- 取消 `direct/inferred` 分类字段，额外字段一律拒收；ledger 只接受直接事实，解释、直觉和串联内容留在正文，不确定内容继续归 P2 uncertainties 和后续专家问答。
+- 新增正文与账本双向锚定门禁：每个 ledger id 必须在正文出现，正文 claim id 必须存在于 ledger，B/M/E 前缀必须落在对应章节，独立成行的空锚点拒收。
+- `complete-summary` 继续机器校验 locator 可解析、paper-notes 背书交集和 evidence 原文包含；论断语义真伪、正文是否正确使用证据及写作质量明确保留给人工与后续问答验真。
+- summary stage output fingerprint 改为覆盖 `summary.md` 与 `summary-ledger.json` 精确字节的 bundle fingerprint；任一文件变化都会改变下游 lineage。metadata 分别记录正文/账本 fingerprint、claim/anchor 数和分节统计。
+- `prepare-summary` 同时报告两个输出目标；同步更新 `/mw-paper` command、paper skill、根 skill、OpenAI metadata、summary/paper-state contracts 和 plugin manifest。
+- `README.md`、`scripts/mw_paper_sources.py`、`scripts/mw_runtime.py` 均未修改；P2 遗留的 `atomic_write_bytes` 下沉 runtime 与 arXiv paper-id 版本解析本次未处理。
+
+验证：
+
+- `python -m unittest discover -s tests -v`：100/100 通过，其中原 v2.1 workflow 29/29、P0 runtime 12/12、P1 paper state 18/18、P2 close reading 20/20、P3.5 summary 21/21。
+- P3.5 覆盖双文件合法完成、ledger 精确字段、禁用旧标签、B/M/E claim family、locator allowlist、evidence containment、正文三节、双向锚定、章节前缀、孤立锚点、旧/新内嵌账本拒收、双文件 fingerprint 漂移、index tamper、CLI 双目标和缺 ledger 拒收。
+- `python -m py_compile`、root/paper skill validator、plugin validator、manifest JSON、`git diff --check`、README 和 P2/runtime 零差异检查通过。
+- plugin cachebuster 更新为 `2.2.0-alpha.4+codex.20260718093644`；当前 Codex CLI 仍无 `plugin add` 子命令，`~/.codex/skills/mary-workflow` 与 `~/plugins/mary-workflow` 均通过符号链接直接指向本仓库。

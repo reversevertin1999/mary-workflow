@@ -1,5 +1,5 @@
 ---
-description: Manage paper state, close-read arXiv HTML/PDF, or produce a source-grounded summary.
+description: Manage paper state, close-read arXiv HTML/PDF, or write a readable source-grounded summary.
 argument-hint: [read|summarize|create|list|status|apply-action] [source/options]
 ---
 
@@ -31,8 +31,12 @@ Manage project-local paper workspaces without entering the milestone workflow au
 6. For `summarize [paper-id]`:
    - run `prepare-summary`, specifying `--paper-id` when needed;
    - read `paper-notes.md`, `summary-context.json`, and cited `source.md` spans;
-   - create `summary.md` per `references/summary-contract.md` with background/method/experiments claim quadruples;
-   - run `complete-summary` and do not bypass locator or evidence rejection.
+   - create `summary.md` as a coherent article for a peer who has not read the paper, with Background, Method, and Experiments H2 sections;
+   - make Method the longest and most explanatory section, explain intuition and mechanism rather than listing modules, and use LaTeX for useful formulas;
+   - mark key factual sentences inline with `[Bxx]`, `[Mxx]`, or `[Exx]`;
+   - create `summary-ledger.json` separately, containing only direct claim quadruples grounded in the paper-notes allowlist and exact source excerpts;
+   - keep interpretation and connective reasoning in prose, leave unresolved points in P2 uncertainties, and do not add old `direct`/`inferred` labels;
+   - run `complete-summary` and do not bypass body-anchor, locator, evidence, or dual-file fingerprint rejection.
 7. Treat `.mary-research/papers/<paper-id>/state.json` as authority. Never hand-edit state or generated context/index files.
 8. Do not invoke `/mw-plan`, `/mw-run`, grants, or execution leases for paper actions.
 9. Do not produce slides or quiz artifacts before their implementation stages.

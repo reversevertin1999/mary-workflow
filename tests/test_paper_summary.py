@@ -27,6 +27,7 @@ from mw_paper_locators import (  # noqa: E402
     parse_source_locator_blocks,
 )
 from mw_paper_sources import extract_notes_ledger, sha256_file  # noqa: E402
+from mw_paper_summary import summary_bundle_fingerprint  # noqa: E402
 from tests.paper_read_helpers import write_read_fixture, write_summary_fixture  # noqa: E402
 
 
@@ -123,7 +124,7 @@ class SummaryContractTests(unittest.TestCase):
         self.tempdir.cleanup()
 
     def complete(self, output_fingerprint: str | None = None) -> dict[str, object]:
-        digest = output_fingerprint or sha256_file(self.workspace / "summary.md")
+        digest = output_fingerprint or summary_bundle_fingerprint(self.workspace)
         return apply_paper_action(
             self.project,
             self.paper_id,
@@ -146,64 +147,88 @@ class SummaryContractTests(unittest.TestCase):
         index = json.loads((self.workspace / "source-locators.json").read_text(encoding="utf-8"))
         self.assertEqual(index["source"]["source_fingerprint"], fingerprint("1"))
         self.assertEqual(index["locators"]["html#S1"][0]["preview"], "Fixture source.")
+        prepared = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts/mw_paper.py"),
+                "--project-root",
+                str(self.project),
+                "prepare-summary",
+                "--paper-id",
+                self.paper_id,
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        self.assertIn("summary_target:", prepared.stdout)
+        self.assertIn("summary_ledger_target:", prepared.stdout)
 
-    def test_valid_three_section_summary_completes_with_claim_metadata(self) -> None:
-        write_summary_fixture(self.workspace)
+    def test_valid_blog_and_ledger_complete_with_bidirectional_metadata(self) -> None:
+        digest = write_summary_fixture(self.workspace)
         state = self.complete()
         summary = state["stages"]["summary"]
         self.assertEqual(summary["status"], "complete")
         self.assertEqual(summary["artifact"], "summary.md")
+        self.assertEqual(summary["output_fingerprint"], digest)
+        self.assertEqual(summary["metadata"]["summary_ledger_schema"], 1)
+        self.assertEqual(summary["metadata"]["summary_ledger_artifact"], "summary-ledger.json")
+        self.assertEqual(len(summary["metadata"]["summary_body_fingerprint"]), 64)
+        self.assertEqual(len(summary["metadata"]["summary_ledger_fingerprint"]), 64)
         self.assertEqual(summary["metadata"]["claim_count"], 3)
         self.assertEqual(
             summary["metadata"]["section_claim_counts"],
             {"background": 1, "method": 1, "experiments": 1},
         )
+        self.assertEqual(summary["metadata"]["body_claim_reference_count"], 3)
         self.assertEqual(summary["metadata"]["cited_locator_count"], 1)
 
-    def test_claim_must_contain_exact_quadruple(self) -> None:
+    def test_claim_must_contain_exact_quadruple_and_no_direct_inferred_tag(self) -> None:
         def mutate(ledger: dict[str, object]) -> None:
-            ledger["sections"]["method"][0].pop("evidence")  # type: ignore[index]
+            ledger["claims"][1].pop("evidence")  # type: ignore[index]
 
         write_summary_fixture(self.workspace, mutate)
         with self.assertRaises(SystemExit) as context:
             self.complete()
         self.assertIn("claim_id, claim_text, evidence, source_locators", str(context.exception))
 
-    def test_claim_id_prefix_and_global_uniqueness_are_enforced(self) -> None:
-        def wrong_prefix(ledger: dict[str, object]) -> None:
-            ledger["sections"]["method"][0]["claim_id"] = "B02"  # type: ignore[index]
+        def add_old_tag(ledger: dict[str, object]) -> None:
+            ledger["claims"][1]["kind"] = "direct"  # type: ignore[index]
 
-        write_summary_fixture(self.workspace, wrong_prefix)
+        write_summary_fixture(self.workspace, add_old_tag)
         with self.assertRaises(SystemExit) as context:
             self.complete()
-        self.assertIn("must match M", str(context.exception))
+        self.assertIn("must contain exactly", str(context.exception))
+
+    def test_claim_id_shape_global_uniqueness_and_three_families_are_enforced(self) -> None:
+        def invalid_id(ledger: dict[str, object]) -> None:
+            ledger["claims"][1]["claim_id"] = "Q01"  # type: ignore[index]
+
+        write_summary_fixture(self.workspace, invalid_id)
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("must match Bxx, Mxx, or Exx", str(context.exception))
 
         def duplicate(ledger: dict[str, object]) -> None:
-            ledger["sections"]["method"][0]["claim_id"] = "M01"  # type: ignore[index]
-            ledger["sections"]["method"].append(dict(ledger["sections"]["method"][0]))  # type: ignore[index]
+            ledger["claims"].append(dict(ledger["claims"][1]))  # type: ignore[index]
 
         write_summary_fixture(self.workspace, duplicate)
         with self.assertRaises(SystemExit) as context:
             self.complete()
         self.assertIn("Duplicate summary claim_id", str(context.exception))
 
-    def test_all_three_ordered_sections_are_required(self) -> None:
-        def mutate(ledger: dict[str, object]) -> None:
-            sections = ledger["sections"]  # type: ignore[assignment]
-            ledger["sections"] = {
-                "method": sections["method"],
-                "background": sections["background"],
-                "experiments": sections["experiments"],
-            }
+        def remove_method_claim(ledger: dict[str, object]) -> None:
+            ledger["claims"] = [ledger["claims"][0], ledger["claims"][2]]  # type: ignore[index]
 
-        write_summary_fixture(self.workspace, mutate)
+        write_summary_fixture(self.workspace, remove_method_claim)
         with self.assertRaises(SystemExit) as context:
             self.complete()
-        self.assertIn("ordered exactly: background, method, experiments", str(context.exception))
+        self.assertIn("missing: method", str(context.exception))
 
     def test_locator_must_resolve_and_be_accepted_by_paper_notes(self) -> None:
         def nonexistent(ledger: dict[str, object]) -> None:
-            ledger["sections"]["background"][0]["source_locators"] = ["html#missing"]  # type: ignore[index]
+            ledger["claims"][0]["source_locators"] = ["html#missing"]  # type: ignore[index]
 
         write_summary_fixture(self.workspace, nonexistent)
         with self.assertRaises(SystemExit) as context:
@@ -215,7 +240,7 @@ class SummaryContractTests(unittest.TestCase):
         self.state, self.context = prepare_summary(self.project, self.paper_id)
 
         def outside_notes(ledger: dict[str, object]) -> None:
-            claim = ledger["sections"]["background"][0]  # type: ignore[index]
+            claim = ledger["claims"][0]  # type: ignore[index]
             claim["source_locators"] = ["html#S2"]
             claim["evidence"] = "Additional source evidence."
 
@@ -226,26 +251,137 @@ class SummaryContractTests(unittest.TestCase):
 
     def test_evidence_must_be_exactly_resolvable_under_cited_locator(self) -> None:
         def mutate(ledger: dict[str, object]) -> None:
-            ledger["sections"]["experiments"][0]["evidence"] = "Invented evidence absent from source."  # type: ignore[index]
+            ledger["claims"][2]["evidence"] = "Invented evidence absent from source."  # type: ignore[index]
 
         write_summary_fixture(self.workspace, mutate)
         with self.assertRaises(SystemExit) as context:
             self.complete()
         self.assertIn("evidence does not resolve", str(context.exception))
 
-    def test_summary_inputs_and_output_fingerprint_cannot_drift(self) -> None:
+    def test_summary_ledger_inputs_and_bundle_fingerprint_cannot_drift(self) -> None:
         def mutate(ledger: dict[str, object]) -> None:
             ledger["inputs"]["paper_notes"]["fingerprint"] = fingerprint("f")  # type: ignore[index]
 
         write_summary_fixture(self.workspace, mutate)
         with self.assertRaises(SystemExit) as context:
             self.complete()
-        self.assertIn("inputs must exactly copy", str(context.exception))
+        self.assertIn("summary-ledger inputs must exactly copy", str(context.exception))
 
         write_summary_fixture(self.workspace)
         with self.assertRaises(SystemExit) as context:
             self.complete(fingerprint("f"))
-        self.assertIn("does not match summary.md", str(context.exception))
+        self.assertIn("does not match the summary.md + summary-ledger.json bundle", str(context.exception))
+
+    def test_body_and_ledger_changes_both_change_bundle_fingerprint(self) -> None:
+        original = write_summary_fixture(self.workspace)
+        summary_path = self.workspace / "summary.md"
+        summary_path.write_text(summary_path.read_text(encoding="utf-8") + "\nClosing prose.\n", encoding="utf-8")
+        self.assertNotEqual(summary_bundle_fingerprint(self.workspace), original)
+        with self.assertRaises(SystemExit) as context:
+            self.complete(original)
+        self.assertIn("summary.md + summary-ledger.json bundle", str(context.exception))
+
+        original = write_summary_fixture(self.workspace)
+        ledger_path = self.workspace / "summary-ledger.json"
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        ledger["claims"][0]["claim_text"] = "A different grounded claim with enough detail."
+        ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+        self.assertNotEqual(summary_bundle_fingerprint(self.workspace), original)
+        with self.assertRaises(SystemExit) as context:
+            self.complete(original)
+        self.assertIn("summary.md + summary-ledger.json bundle", str(context.exception))
+
+    def test_body_must_reference_every_ledger_claim(self) -> None:
+        write_summary_fixture(self.workspace)
+        summary_path = self.workspace / "summary.md"
+        summary_path.write_text(
+            summary_path.read_text(encoding="utf-8").replace(" [M01]", ""), encoding="utf-8"
+        )
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("missing: M01", str(context.exception))
+
+    def test_body_cannot_reference_unknown_claim(self) -> None:
+        write_summary_fixture(self.workspace)
+        summary_path = self.workspace / "summary.md"
+        summary_path.write_text(
+            summary_path.read_text(encoding="utf-8").replace(
+                "The evaluation reports", "An unsupported fact appears here [E99]. The evaluation reports"
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("unknown claim_id E99", str(context.exception))
+
+    def test_body_requires_exact_ordered_nonempty_sections(self) -> None:
+        write_summary_fixture(self.workspace)
+        summary_path = self.workspace / "summary.md"
+        summary_path.write_text(
+            summary_path.read_text(encoding="utf-8").replace("## Method", "### Method"),
+            encoding="utf-8",
+        )
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("H2 sections must be ordered exactly", str(context.exception))
+
+        write_summary_fixture(self.workspace)
+        summary_path.write_text(
+            re.sub(
+                r"## Method\n.*?(?=## Experiments)",
+                "## Method\n\n",
+                summary_path.read_text(encoding="utf-8"),
+                flags=re.DOTALL,
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("section method must be non-empty", str(context.exception))
+
+    def test_body_anchor_must_match_section_and_be_inline(self) -> None:
+        write_summary_fixture(self.workspace)
+        summary_path = self.workspace / "summary.md"
+        summary_path.write_text(
+            summary_path.read_text(encoding="utf-8").replace(
+                "The method addresses", "A background claim is misplaced [B01]. The method addresses"
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("claim anchor B01 is in method", str(context.exception))
+
+        write_summary_fixture(self.workspace)
+        summary_path.write_text(
+            summary_path.read_text(encoding="utf-8").replace("## Experiments", "[M01]\n\n## Experiments"),
+            encoding="utf-8",
+        )
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("isolated claim anchor", str(context.exception))
+
+    def test_summary_md_rejects_old_embedded_ledger_format(self) -> None:
+        write_summary_fixture(self.workspace)
+        summary_path = self.workspace / "summary.md"
+        summary_path.write_text(
+            "<!-- mary-summary:v1 -->\n```json\n{\"summary_schema\": 1}\n```\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("blog prose only", str(context.exception))
+
+        write_summary_fixture(self.workspace)
+        summary_path.write_text(
+            "## Background\nFact [B01].\n\n## Method\n"
+            "```json\n{\"summary_ledger_schema\": 1}\n```\nFact [M01].\n\n"
+            "## Experiments\nFact [E01].\n",
+            encoding="utf-8",
+        )
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("blog prose only", str(context.exception))
 
     def test_tampered_locator_index_is_rejected(self) -> None:
         write_summary_fixture(self.workspace)
@@ -276,6 +412,27 @@ class SummaryContractTests(unittest.TestCase):
         )
         output = json.loads(completed.stdout)
         self.assertEqual(output["paper"]["stages"]["summary"]["status"], "complete")
+
+    def test_complete_summary_cli_requires_the_ledger_file(self) -> None:
+        write_summary_fixture(self.workspace)
+        (self.workspace / "summary-ledger.json").unlink()
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts/mw_paper.py"),
+                "--project-root",
+                str(self.project),
+                "complete-summary",
+                "--paper-id",
+                self.paper_id,
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("summary-ledger.json is missing", completed.stderr)
 
 
 class SummaryInputGateTests(unittest.TestCase):

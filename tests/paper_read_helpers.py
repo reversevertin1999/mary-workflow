@@ -10,6 +10,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from mw_paper_locators import parse_source_locator_blocks  # noqa: E402
 from mw_paper_sources import QUALITY_DIMENSIONS, quality_gate, sha256_file, write_read_context  # noqa: E402
+from mw_paper_summary import summary_bundle_fingerprint  # noqa: E402
 
 
 def write_read_fixture(
@@ -119,17 +120,30 @@ def write_summary_fixture(workspace: Path, mutate: object = None) -> str:
         "source_locators": [locator],
     }
     ledger = {
-        "summary_schema": 1,
+        "summary_ledger_schema": 1,
         "paper_id": context["paper_id"],
         "inputs": context["inputs"],
-        "sections": {
-            "background": [{**claim, "claim_id": "B01"}],
-            "method": [{**claim, "claim_id": "M01"}],
-            "experiments": [{**claim, "claim_id": "E01"}],
-        },
+        "claims": [
+            {**claim, "claim_id": "B01"},
+            {**claim, "claim_id": "M01"},
+            {**claim, "claim_id": "E01"},
+        ],
     }
     if callable(mutate):
         mutate(ledger)
-    summary = "<!-- mary-summary:v1 -->\n```json\n" + json.dumps(ledger, ensure_ascii=False, indent=2) + "\n```\n"
+    summary = (
+        "# A readable fixture summary\n\n"
+        "## Background\n\n"
+        "The paper begins from a concrete, evidence-backed research problem. [B01]\n\n"
+        "## Method\n\n"
+        "The method addresses that problem through a grounded mechanism rather than a list of components. [M01]\n\n"
+        "Intuitively, the fixture maps an input $x$ to an output $y$ with $y=f(x)$, "
+        "which leaves room to explain why each step matters.\n\n"
+        "## Experiments\n\n"
+        "The evaluation reports a directly supported experimental observation. [E01]\n"
+    )
     (workspace / "summary.md").write_text(summary, encoding="utf-8")
-    return sha256_file(workspace / "summary.md")
+    (workspace / "summary-ledger.json").write_text(
+        json.dumps(ledger, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return summary_bundle_fingerprint(workspace)
