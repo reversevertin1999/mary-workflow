@@ -518,3 +518,33 @@ v2.2 P1 paper state and `/mw-paper` skeleton.
 - P1 回归覆盖独立创建与幂等、多论文隔离、arXiv/local id、schema 拒载、阶段 gate、失败重试、lineage、source/reset stale 级联、quiz 依赖、非法/损坏信封审计和 CLI 命令面。
 - `python -m py_compile`、plugin validator、paper skill validator、manifest JSON 校验和 `git diff --check` 通过。
 - plugin cachebuster 更新为 `2.2.0-alpha.1+codex.20260718064000`；当前个人 marketplace 是本地目录而非 Git marketplace，Codex CLI 不支持对其执行 `marketplace upgrade`，现有 skill/plugin 安装均通过符号链接直接指向本仓库。
+
+### v2.2 P2 close-reading entry
+
+Baseline commit: `386cc6a` - `P1 finished`
+
+完成内容：
+
+- 新增 `scripts/mw_paper_sources.py`，隔离单篇论文获取、HTML/PDF 规范化、五维解析质量评估和精读账本校验。
+- `prepare-read` 对 arXiv 固定先请求 `/html/<id>`；HTML 不可用或 `text`/`structure` 核心质量失败时自动回退 `/pdf/<id>`。普通本地/远程 HTML/PDF 使用同一解析层。
+- 网络获取使用明确 User-Agent、45 秒超时和 64 MiB 上限；PDF 通过 Poppler `pdftotext -layout` 降级抽取，无新增 Python 依赖。
+- 每次准备精读落盘 `source.html|pdf`、带 locator 的 `source.md`、`parse-quality.json` 和机器生成的 `read-context.json`。
+- 五维矩阵固定为 `text`、`structure`、`equations`、`figures`、`tables`；状态固定为 `pass`、`degraded`、`failed`、`not_applicable`，每维强制 metrics 和 evidence。
+- LaTeXML HTML 解析区分公式布局 `ltx_eqn_table` 与科研表格 `figure.ltx_table`，提取表格行和单元格；仅保留图注而没有视觉像素时，figure 诚实标记为 degraded。
+- 任一 failed 维度将质量 gate 设为 blocked；degraded/failed 维度必须出现在至少一个 uncertainty 的 `quality_dimensions` 中。
+- 新增 `references/paper-notes-contract.md`：`paper-notes.md` 必须包含 schema 1 JSON 账本，强制书目信息、背景、问题、贡献、方法、实验/证明、局限、结论、逐节账本、解析质量和非空不确定性。
+- HTML claim locator 使用 `html#<anchor>`，PDF 使用 `pdf:p<N>`；研究 claim、section ledger 和 uncertainty 均拒收无 locator 输入。
+- `complete-read` 校验 paper/source 身份、source fingerprint、质量报告 fingerprint、五维状态、必填字段、locator、uncertainty 覆盖和 notes 实际字节 fingerprint 后，才允许 `read -> complete`。
+- blocked gate 默认拒绝完成并保持 `read=in_progress`。只有明确 `--override-quality --override-reason` 才可覆盖；覆盖生成 `quality-override-<attempt>.json`，并在 state metadata 和 log 中记录原因与 fingerprint。
+- `paper_state_schema: 1` 保持不变，通过可选 stage metadata 向前兼容；source 变化继续复用 P1 stale 级联并自动开启新的 read attempt。
+- 更新 `/mw-paper` command、paper skill、根 skill、OpenAI metadata、paper state contract 和 plugin manifest；`summary.md`、`slides.md`、`quiz-log.md` 仍未实现。
+- `README.md` 未修改。
+
+验证：
+
+- `python -m unittest discover -s tests -v`：78/78 通过，其中原 v2.1 workflow 29/29、P0 runtime 12/12、P1 paper state 18/18、P2 close reading 19/19。
+- P2 覆盖 HTML 优先且不请求 PDF、HTML 404/核心质量失败自动 PDF 回退、LaTeXML 布局表排除、PDF 降级矩阵、source 变更重启、账本合法完成和各类拒收规则。
+- 阻断/覆盖测试覆盖静默完成拒收、pass gate 禁止无意义 override、显式用户覆盖、原因文件落盘和 state fingerprint 对齐。
+- 真实 arXiv `2401.00001` 冒烟通过：选择官方 HTML，表格行进入 `source.md`，最终 `gate=pass`；同一论文真实 PDF 经本机 `pdftotext` 抽取并生成页码 locator，`gate=pass`。
+- `python -m py_compile`、paper skill validator、plugin validator、manifest JSON、`git diff --check` 和 README 零差异检查通过。
+- plugin cachebuster 更新为 `2.2.0-alpha.2+codex.20260718072135`；当前 Codex CLI 无 `plugin add` 子命令，现有 `~/.codex/skills/mary-workflow` 与 `~/plugins/mary-workflow` 均通过符号链接直接指向本仓库。

@@ -1,11 +1,11 @@
 ---
 name: mary-workflow
-description: Run Mary Workflow's v2.1 milestone engine from `.mary-workflow/` and v2.2 paper-pipeline state skeleton from `.mary-research/`. Use when the user invokes `/mw-init`, `/mw-plan`, `/mw-run`, `/mw-status`, `/mw-stop`, `/mw-debug`, `/mw-cycle`, `/mw-paper`, or asks to run Mary workflow or manage paper pipeline state.
+description: Run Mary Workflow's v2.1 milestone engine from `.mary-workflow/` and v2.2 research-paper pipeline from `.mary-research/`, including contract-validated close reading from arXiv HTML or PDF. Use when the user invokes `/mw-init`, `/mw-plan`, `/mw-run`, `/mw-status`, `/mw-stop`, `/mw-debug`, `/mw-cycle`, `/mw-paper`, asks to run Mary workflow, manage paper state, or read a research paper closely.
 ---
 
 # Mary Workflow
 
-Mary Workflow keeps the v2.1 milestone engine stable while v2.2 adds independent research skills. P1 introduces per-paper state under `.mary-research/papers/` without changing milestone authorization semantics.
+Mary Workflow keeps the v2.1 milestone engine stable while v2.2 adds independent research skills. Paper state and close-reading artifacts live under `.mary-research/papers/` without changing milestone authorization semantics.
 
 ## Commands
 
@@ -19,7 +19,7 @@ User-facing command surface:
 - `/mw-stop`: pause while preserving state, logs, reports, and cycle.
 - `/mw-debug`: manually load debug phase when the workflow is in `DEBUGGING`.
 - `/mw-cycle`: archive the current cycle to `.mary-workflow/cycles/<cycle>/`, reset active short-term state, and point back to `/mw-plan`.
-- `/mw-paper`: create, list, inspect, and transition independent paper states without plan/run authorization.
+- `/mw-paper`: manage independent paper states and produce validated `paper-notes.md` from arXiv HTML/PDF without plan/run authorization.
 
 ## Runtime Rules
 
@@ -38,7 +38,7 @@ User-facing command surface:
 7. `/mw-plan` is blocked until the five-layer project brief is complete; it consumes the full file ledger when asking questions and splitting milestones.
 8. Only a `/mw-run` render contains the plaintext one-time token. `start_execution` atomically confirms the plan and acquires the lease; stop/resume uses a separate single-use grant.
 9. `log.md` stays English for grep and audit stability. User-facing explanations follow `.mary-workflow/config.yaml` `output.language`.
-10. `/mw-paper` uses `scripts/mw_paper.py` and `paper_state_schema: 1`; it does not read or mutate `.mary-workflow/` milestone state.
+10. `/mw-paper` uses `scripts/mw_paper.py` and `paper_state_schema: 1`; it does not read or mutate `.mary-workflow/` milestone state. A blocked parse-quality report requires explicit user override.
 
 ## Memory Model
 
@@ -64,4 +64,4 @@ Command Markdown files also live under `commands/` for clients that support file
 
 ## File Contract
 
-See `references/state-contract.md` for v2.1 milestone state and `references/paper-state-contract.md` for paper state schema 1.
+See `references/state-contract.md` for v2.1 milestone state, `references/paper-state-contract.md` for paper state schema 1, and `references/paper-notes-contract.md` for close-reading output.

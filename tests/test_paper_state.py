@@ -25,6 +25,7 @@ from mw_paper import (  # noqa: E402
     resolve_paper_id,
 )
 from mary_workflow import default_state as default_workflow_state  # noqa: E402
+from tests.paper_read_helpers import write_read_fixture  # noqa: E402
 
 
 def fingerprint(character: str) -> str:
@@ -52,12 +53,21 @@ class PaperStateTests(unittest.TestCase):
 
     def complete(self, stage: str, digest: str) -> dict[str, object]:
         self.apply("start_stage", {"stage": stage})
+        artifact = f"{stage}.md"
+        if stage == "read":
+            artifact = "paper-notes.md"
+            digest = write_read_fixture(
+                paper_directory(self.project, self.paper_id),
+                paper_id=self.paper_id,
+                locator=self.source,
+                source_fingerprint=fingerprint("1"),
+            )
         return self.apply(
             "complete_stage",
             {
                 "stage": stage,
                 "output_fingerprint": digest,
-                "artifact": f"{stage}.md",
+                "artifact": artifact,
             },
         )
 
@@ -124,9 +134,15 @@ class PaperStateTests(unittest.TestCase):
             {"source": fingerprint("1")},
         )
 
+        notes_fingerprint = write_read_fixture(
+            paper_directory(self.project, self.paper_id),
+            paper_id=self.paper_id,
+            locator=self.source,
+            source_fingerprint=fingerprint("1"),
+        )
         state = self.apply(
             "complete_stage",
-            {"stage": "read", "output_fingerprint": fingerprint("a"), "artifact": "paper-notes.md"},
+            {"stage": "read", "output_fingerprint": notes_fingerprint, "artifact": "paper-notes.md"},
         )
         self.assertEqual(state["stages"]["read"]["status"], "complete")
         self.assertEqual(paper_progress(state), {"completed": 1, "total": 4, "eligible_stages": ["summary"]})
@@ -139,7 +155,8 @@ class PaperStateTests(unittest.TestCase):
         self.assertEqual(state["stages"]["read"]["output_fingerprint"], "")
 
     def test_quiz_depends_on_read_and_summary_but_not_slides(self) -> None:
-        self.complete("read", fingerprint("a"))
+        read_state = self.complete("read", fingerprint("a"))
+        read_fingerprint = read_state["stages"]["read"]["output_fingerprint"]
         self.complete("summary", fingerprint("b"))
 
         state = self.apply("start_stage", {"stage": "quiz"})
@@ -147,7 +164,7 @@ class PaperStateTests(unittest.TestCase):
         self.assertEqual(state["stages"]["slides"]["status"], "pending")
         self.assertEqual(
             state["stages"]["quiz"]["input_fingerprints"],
-            {"read": fingerprint("a"), "summary": fingerprint("b")},
+            {"read": read_fingerprint, "summary": fingerprint("b")},
         )
 
     def test_source_change_cascades_stale_to_started_stages(self) -> None:
@@ -306,18 +323,19 @@ class PaperCliAndSurfaceTests(unittest.TestCase):
         state = read_paper_state(self.project, "arxiv-2501.00003v1")
         self.assertEqual(state["audit"]["rejected_actions"], 1)
 
-    def test_plugin_surfaces_mw_paper_without_claiming_content_stages(self) -> None:
+    def test_plugin_surfaces_read_without_claiming_downstream_content_stages(self) -> None:
         command = (REPO_ROOT / "commands/mw-paper.md").read_text(encoding="utf-8")
         skill = (REPO_ROOT / "skills/paper/SKILL.md").read_text(encoding="utf-8")
         contract = (REPO_ROOT / "references/paper-state-contract.md").read_text(encoding="utf-8")
         manifest = json.loads((REPO_ROOT / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
 
         self.assertIn("# /mw-paper", command)
-        self.assertIn("P1 implements state only", command)
+        self.assertIn("For `read <source>`", command)
+        self.assertIn("Do not produce summary, slides, or quiz artifacts", command)
         self.assertIn("name: paper", skill)
         self.assertIn("quiz` depends on `read` and `summary`, not `slides`", skill)
         self.assertIn("paper_state_schema", contract)
-        self.assertTrue(manifest["version"].startswith("2.2.0-alpha.1"))
+        self.assertTrue(manifest["version"].startswith("2.2.0-alpha.2"))
 
     def test_mw_init_reset_does_not_delete_paper_workspaces(self) -> None:
         self.run_cli(

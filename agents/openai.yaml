@@ -1,7 +1,7 @@
 interface:
   display_name: "Mary Workflow"
-  short_description: "Run milestone workflows and manage research paper state"
-  default_prompt: "Use $mary-workflow to understand a project, plan and run milestones, or manage independent research-paper state with /mw-paper."
+  short_description: "Run milestone workflows and close-read research papers"
+  default_prompt: "Use $mary-workflow to close-read an arXiv paper with parse-quality gating, or manage project milestones."
 
 policy:
   allow_implicit_invocation: true

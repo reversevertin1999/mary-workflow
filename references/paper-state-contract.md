@@ -9,7 +9,12 @@ The paper pipeline is independent from the v2.1 milestone state machine. It reus
 └── papers/
     └── <paper-id>/
         ├── state.json
-        └── log.md
+        ├── log.md
+        ├── source.html or source.pdf
+        ├── source.md
+        ├── parse-quality.json
+        ├── read-context.json
+        └── paper-notes.md
 ```
 
 `/mw-paper` may create this directory before `/mw-init`. The main workflow remains authoritative only through `.mary-workflow/state.yaml`; each paper is authoritative through its own `state.json`. `/mw-init --reset` and `/mw-cycle` do not delete `.mary-research/`, and the v2.1 project scanner excludes it.
@@ -32,7 +37,7 @@ Every fingerprint is a lowercase 64-character SHA-256 hex digest:
 - each completed stage requires `output_fingerprint`;
 - a stage cannot complete if its snapshotted inputs no longer match current upstream fingerprints.
 
-The runtime accepts precomputed fingerprints in P1. Source acquisition and content hashing are implemented by later milestones.
+Low-level `create` accepts a precomputed source fingerprint. `prepare-read` acquires the source, hashes the selected raw HTML/PDF bytes, and updates or creates the paper state with that fingerprint.
 
 ## Stage Graph
 
@@ -73,6 +78,8 @@ in_progress|complete|failed|stale --reset_stage--> pending
 
 A complete stage must be reset before rerun. Dependencies must be complete before a stage starts.
 
+The `read` stage has an additional P2 completion gate: `artifact` must be `paper-notes.md`, its byte fingerprint must match `output_fingerprint`, and the ledger must pass `references/paper-notes-contract.md`. A successful read stores parse-quality decision metadata. Other stages remain state-only until their implementation milestones.
+
 ## Stale Propagation
 
 - Changing `source.fingerprint` marks an already-started `read` stale and cascades through `summary`, `slides`, and `quiz`.
@@ -102,6 +109,8 @@ Complete a stage:
   }
 }
 ```
+
+For `read`, use `complete-read` rather than constructing this envelope manually. The command computes the notes fingerprint and enforces the parse-quality gate. A blocked report requires explicit user confirmation and a reason; the accepted override is recorded in `quality-override-<attempt>.json`, stage metadata, and `log.md`.
 
 Fail or reset a stage:
 

@@ -20,6 +20,14 @@ from mw_runtime import (
     parse_json_payload,
     require_json_object,
 )
+from mw_paper_sources import (
+    PaperReadError,
+    acquire_source,
+    persist_acquisition,
+    sha256_file,
+    validate_paper_notes,
+    write_read_context,
+)
 
 
 RESEARCH_DIR = ".mary-research"
@@ -143,6 +151,7 @@ def default_stage_state() -> JsonObject:
         "updated_at": "",
         "error": "",
         "stale_reason": "",
+        "metadata": {},
     }
 
 
@@ -231,7 +240,10 @@ def validate_paper_state(state: object, expected_paper_id: str | None = None) ->
         for field in ("updated_at", "error", "stale_reason"):
             if not isinstance(item.get(field), str):
                 raise PaperError(f"Stage {stage}.{field} must be a string.")
-        if status == "pending" and (inputs or output or item["artifact"]):
+        metadata = item.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            raise PaperError(f"Stage {stage}.metadata must be an object.")
+        if status == "pending" and (inputs or output or item["artifact"] or metadata):
             raise PaperError(f"Pending stage {stage} must not retain lineage or artifact fields.")
         if status == "complete" and not item["output_fingerprint"]:
             raise PaperError(f"Complete stage {stage} requires output_fingerprint.")
@@ -415,11 +427,12 @@ def action_start_stage(state: PaperState, data: JsonObject) -> None:
             "updated_at": timestamp,
             "error": "",
             "stale_reason": "",
+            "metadata": {},
         }
     )
 
 
-def action_complete_stage(state: PaperState, data: JsonObject) -> None:
+def action_complete_stage(project_root: Path, state: PaperState, data: JsonObject) -> None:
     stage = require_stage(data)
     item = state["stages"][stage]
     if item["status"] != "in_progress":
@@ -427,16 +440,44 @@ def action_complete_stage(state: PaperState, data: JsonObject) -> None:
     current_inputs = current_input_fingerprints(state, stage)
     if item["input_fingerprints"] != current_inputs:
         raise PaperError(f"complete_stage {stage} rejected because its input fingerprints changed.")
+    output_fingerprint = normalize_fingerprint(
+        data.get("output_fingerprint"), f"complete_stage {stage} output_fingerprint"
+    )
+    artifact = normalize_artifact_path(data.get("artifact"))
+    metadata: JsonObject = {}
+    if stage == "read":
+        if artifact != "paper-notes.md":
+            raise PaperError("complete_stage read requires artifact paper-notes.md.")
+        try:
+            validation = validate_paper_notes(
+                paper_directory(project_root, state["paper_id"]),
+                expected_paper_id=state["paper_id"],
+                expected_locator=state["source"]["locator"],
+                expected_source_fingerprint=state["source"]["fingerprint"],
+                override=data.get("quality_override"),
+            )
+        except PaperReadError as exc:
+            raise PaperError(str(exc)) from exc
+        if output_fingerprint != validation["notes_fingerprint"]:
+            raise PaperError("complete_stage read output_fingerprint does not match paper-notes.md.")
+        metadata = validation["quality"]
+        override_record = validation["override_record"]
+        if override_record is not None:
+            override_record["recorded_at"] = now_iso()
+            override_artifact = f"quality-override-{item['attempts']}.json"
+            override_path = paper_directory(project_root, state["paper_id"]) / override_artifact
+            atomic_write_text(override_path, json.dumps(override_record, ensure_ascii=False, indent=2) + "\n")
+            metadata["override_artifact"] = override_artifact
+            metadata["override_fingerprint"] = sha256_file(override_path)
     item.update(
         {
             "status": "complete",
-            "output_fingerprint": normalize_fingerprint(
-                data.get("output_fingerprint"), f"complete_stage {stage} output_fingerprint"
-            ),
-            "artifact": normalize_artifact_path(data.get("artifact")),
+            "output_fingerprint": output_fingerprint,
+            "artifact": artifact,
             "updated_at": now_iso(),
             "error": "",
             "stale_reason": "",
+            "metadata": metadata,
         }
     )
 
@@ -537,7 +578,7 @@ def apply_paper_action(project_root: Path, paper_id: object, payload: object) ->
         if action == "start_stage":
             action_start_stage(working_state, data)
         elif action == "complete_stage":
-            action_complete_stage(working_state, data)
+            action_complete_stage(project_root, working_state, data)
         elif action == "fail_stage":
             action_fail_stage(working_state, data)
         elif action == "reset_stage":
@@ -570,6 +611,96 @@ def paper_progress(state: PaperState) -> JsonObject:
 
 def status_payload(state: PaperState) -> JsonObject:
     return {"paper": state, "progress": paper_progress(state)}
+
+
+def normalized_source_locator(value: object) -> str:
+    locator = str(value or "").strip()
+    if not locator:
+        raise PaperError("source locator must be non-empty.")
+    if extract_arxiv_id(locator) or re.match(r"^https?://", locator, flags=re.IGNORECASE):
+        return locator
+    if locator.lower().startswith("file://"):
+        return locator
+    return str(Path(locator).expanduser().resolve())
+
+
+def prepare_read(
+    project_root: Path,
+    *,
+    source_locator: object | None = None,
+    paper_id: object | None = None,
+    fetcher: object = None,
+    pdf_extractor: object = None,
+) -> tuple[PaperState, JsonObject]:
+    root = Path(project_root).resolve()
+    existing_state: PaperState | None = None
+    if source_locator is None:
+        canonical_id = resolve_paper_id(root, paper_id)
+        existing_state = read_paper_state(root, canonical_id)
+        locator = existing_state["source"]["locator"]
+    else:
+        locator = normalized_source_locator(source_locator)
+
+    acquisition_kwargs: JsonObject = {"arxiv_id": extract_arxiv_id(locator)}
+    if fetcher is not None:
+        acquisition_kwargs["fetcher"] = fetcher
+    if pdf_extractor is not None:
+        acquisition_kwargs["pdf_extractor"] = pdf_extractor
+    try:
+        acquisition = acquire_source(locator, **acquisition_kwargs)
+    except PaperReadError as exc:
+        raise PaperError(str(exc)) from exc
+    source_fingerprint = acquisition["report"]["source"]["fingerprint"]
+    canonical_id = (
+        existing_state["paper_id"]
+        if existing_state is not None
+        else normalize_paper_id(paper_id)
+        if paper_id is not None
+        else derive_paper_id(locator, source_fingerprint)
+    )
+    if existing_state is None and paper_state_path(root, canonical_id).is_file():
+        existing_state = read_paper_state(root, canonical_id)
+
+    if existing_state is None:
+        state, _ = create_paper(root, locator, source_fingerprint, canonical_id)
+    else:
+        if existing_state["paper_id"] != canonical_id:
+            raise PaperError(f"Paper state belongs to {existing_state['paper_id']}, not {canonical_id}.")
+        current_source = existing_state["source"]
+        unchanged = current_source["locator"] == locator and current_source["fingerprint"] == source_fingerprint
+        if unchanged and existing_state["stages"]["read"]["status"] == "complete":
+            raise PaperError("Read stage is already complete for this source; reset_stage read before rerun.")
+        if not unchanged:
+            state = apply_paper_action(
+                root,
+                canonical_id,
+                {
+                    "action": "update_source",
+                    "data": {"locator": locator, "fingerprint": source_fingerprint},
+                },
+            )
+        else:
+            state = existing_state
+
+    report = persist_acquisition(paper_directory(root, canonical_id), acquisition)
+    write_read_context(
+        paper_directory(root, canonical_id), canonical_id, state["source"]["locator"]
+    )
+    read_status = state["stages"]["read"]["status"]
+    if read_status in {"pending", "failed", "stale"}:
+        state = apply_paper_action(
+            root,
+            canonical_id,
+            {"action": "start_stage", "data": {"stage": "read"}},
+        )
+    elif read_status != "in_progress":
+        raise PaperError(f"Read stage cannot be prepared from status {read_status}.")
+    append_paper_log(
+        root,
+        canonical_id,
+        f"prepared read format={report['source']['format']} quality_gate={report['gate']}",
+    )
+    return state, report
 
 
 def load_action_payload(args: argparse.Namespace) -> JsonObject:
@@ -627,6 +758,74 @@ def cmd_apply_action(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prepare_read(args: argparse.Namespace) -> int:
+    state, report = prepare_read(
+        Path(args.project_root),
+        source_locator=args.source,
+        paper_id=args.paper_id,
+    )
+    workspace = paper_directory(Path(args.project_root), state["paper_id"])
+    print(f"paper_workspace: {workspace}")
+    print(f"normalized_source: {workspace / 'source.md'}")
+    print(f"parse_quality: {workspace / 'parse-quality.json'}")
+    print(f"read_context: {workspace / 'read-context.json'}")
+    print(f"paper_notes_target: {workspace / 'paper-notes.md'}")
+    print(
+        json.dumps(
+            {
+                "paper_id": state["paper_id"],
+                "read_status": state["stages"]["read"]["status"],
+                "source": report["source"],
+                "quality_gate": report["gate"],
+                "blocking_dimensions": report["blocking_dimensions"],
+                "dimensions": {
+                    name: item["status"] for name, item in report["dimensions"].items()
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_complete_read(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root)
+    paper_id = resolve_paper_id(project_root, args.paper_id)
+    state = read_paper_state(project_root, paper_id)
+    notes_path = paper_directory(project_root, paper_id) / "paper-notes.md"
+    if not notes_path.is_file():
+        raise PaperError(f"paper-notes.md is missing: {notes_path}")
+    if args.override_reason and not args.override_quality:
+        raise PaperError("--override-reason requires --override-quality.")
+    if args.override_quality and not args.override_reason:
+        raise PaperError("--override-quality requires --override-reason.")
+    override = (
+        {"confirmed_by": "user", "reason": args.override_reason}
+        if args.override_quality
+        else None
+    )
+    data: JsonObject = {
+        "stage": "read",
+        "artifact": "paper-notes.md",
+        "output_fingerprint": sha256_file(notes_path),
+    }
+    if override is not None:
+        data["quality_override"] = override
+    state = apply_paper_action(
+        project_root,
+        paper_id,
+        {"action": "complete_stage", "data": data},
+    )
+    append_paper_log(
+        project_root,
+        paper_id,
+        f"completed read quality_decision={state['stages']['read']['metadata']['decision']}",
+    )
+    print(json.dumps(status_payload(state), ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Mary paper state runtime (paper_state_schema 1)")
     parser.add_argument("--project-root", default=".", help="Project root; defaults to current directory")
@@ -650,6 +849,25 @@ def build_parser() -> argparse.ArgumentParser:
     action_source.add_argument("--json", help="JSON action string")
     action_source.add_argument("--file", help="path to JSON action file")
     action_parser.set_defaults(func=cmd_apply_action)
+
+    prepare_parser = subparsers.add_parser(
+        "prepare-read", help="acquire and normalize one paper source, preferring arXiv HTML"
+    )
+    prepare_parser.add_argument("--source", help="arXiv id/URL or local/remote HTML/PDF")
+    prepare_parser.add_argument("--paper-id", help="existing or explicit canonical paper id")
+    prepare_parser.set_defaults(func=cmd_prepare_read)
+
+    complete_parser = subparsers.add_parser(
+        "complete-read", help="validate paper-notes.md and complete the read stage"
+    )
+    complete_parser.add_argument("--paper-id", help="optional when exactly one paper exists")
+    complete_parser.add_argument(
+        "--override-quality",
+        action="store_true",
+        help="complete despite a blocked parse-quality gate after explicit user confirmation",
+    )
+    complete_parser.add_argument("--override-reason", help="required explanation for a quality override")
+    complete_parser.set_defaults(func=cmd_complete_read)
     return parser
 
 
@@ -657,7 +875,7 @@ def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except PaperError as exc:
+    except (PaperError, PaperReadError) as exc:
         raise SystemExit(str(exc)) from exc
 
 
