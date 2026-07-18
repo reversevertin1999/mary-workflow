@@ -18,7 +18,7 @@ Start or resume a bounded exam-review run. `$ARGUMENTS` should contain the cours
 
 3. Load `skills/exam-review/SKILL.md`; use the sibling Slide skill for missing diagrams and the round-trip skill for image crops.
 4. Follow the rendered Mary phase. In `PLANNING`, confirm scope/date/mode and freeze the plan; in `PLANNED`, show exact evidence and wait for `/mw-run`; in an active run, execute only the current milestone and apply the normal action envelope.
-5. Treat Notion pages, mistake-log entries, calendar events, and local source paths as deliverables. Keep the review scope exact and never silently widen it.
-6. End with evidence for page placement, importance labels, formulas, self-tests, mistake-log linkage, and one next 25-minute action.
+5. Treat local review notes, Mistake Log entries, local schedule records, and source paths as deliverables by default. Do not invent external ids/URLs or synchronization results. Keep the review scope exact and never silently widen it.
+6. End with evidence for local note placement, importance labels, formulas, self-tests, Mistake Log linkage, and one next 25-minute action.
 
 Use `/mw-run`, `/mw-stop`, `/mw-status`, and `/mw-cycle` for the shared Mary lifecycle.

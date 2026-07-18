@@ -1,15 +1,15 @@
 ---
 name: lecture-learning
-description: "Run the complete course Lecture learning flow: organize a Course Hub, reuse Slide to Lecture notes, create a raw recording transcript child page, correct ASR against slides, and fuse only classroom additions with source markers. Use for requests to study a Lecture or combine slides with lecture transcription."
+description: "Run the complete local course Lecture learning flow: organize a Course Hub note, reuse Slide to Lecture notes, preserve a raw recording transcript, correct ASR against slides, and fuse only classroom additions with source markers. Use for requests to study a Lecture or combine slides with lecture transcription."
 ---
 
 # Lecture Learning
 
-This is the course-level orchestration skill. Load `skills/slide-to-lecture/SKILL.md` for Stage 1 and `skills/roundtrip-screenshot/SKILL.md` only when image cropping or screenshot verification is needed. Do not duplicate the Slide workflow.
+This is the course-level orchestration skill. Local files are the default source of truth. Load `skills/slide-to-lecture/SKILL.md` for Stage 1 and `skills/roundtrip-screenshot/SKILL.md` only when image cropping or screenshot verification is needed. Do not duplicate the Slide workflow.
 
 ## Course Information Architecture
 
-Before editing a Lecture, inspect the Course Hub, existing child pages, syllabus/schedule, and Source Index. Build the knowledge map first, then place pages by dependency, engineering flow, or teaching order.
+Before editing a Lecture, inspect the local Course Hub note, existing local child notes, syllabus/schedule, and Source Index. Build the knowledge map first, then place notes by dependency, engineering flow, or teaching order.
 
 Course Hub fixed order:
 
@@ -22,17 +22,19 @@ Course Hub fixed order:
 7. Source Index and environment details.
 8. Exactly one next 8–25 minute action.
 
-Lecture pages are direct Course Hub children. Raw source pages belong under their owning Lecture or Source Index and must not interrupt the Lecture sequence.
+Lecture notes are direct Course Hub children in the local course tree. Raw source files belong beside their owning Lecture note or under the local Source Index and must not interrupt the Lecture sequence.
+
+If the project has no course/notes tree, use a project-local path such as `notes/<course>/`. Keep `.mary-workflow/` for workflow state and reports only.
 
 ## Three Stages
 
 ### Stage 1: Slide foundation
 
-Classify the material and invoke `slide-to-lecture`. Reuse an existing empty Lecture page. Produce the structured slide note and place the complete original PDF at the final `## 📎 原始 Slides` section.
+Classify the material and invoke `slide-to-lecture`. Reuse an existing empty Lecture note. Produce the structured local slide note and link the complete original PDF at the final `## 📎 原始 Slides` section.
 
-### Stage 2: Raw recording page
+### Stage 2: Raw recording file
 
-Under the Lecture's `📎 原始 Slides` section, immediately after the PDF, create or reuse `<course code> Lecture <N> — 课堂录音转写（raw）`. Keep the pasted transcription raw and traceable. Ask the user to paste the transcript there when it is not supplied.
+Under the Lecture note's `📎 原始 Slides` section, immediately after the PDF link, create or reuse the local file `<course code> Lecture <N> — 课堂录音转写（raw）.md`. Keep the pasted transcription raw and traceable. Ask the user to provide the transcript locally when it is not supplied.
 
 ### Stage 3: Correct and fuse
 
@@ -44,15 +46,15 @@ Sync useful English terms to English learning. Put exam points and common mistak
 
 ## Trigger and State Discipline
 
-For `/mw-learn`, treat one Lecture or one bounded topic as one Mary Workflow milestone. The command must preserve the normal plan interview, run authorization, execution lease, review, stop/resume, and cycle rules. Use Notion page IDs/URLs and local source paths as milestone deliverables; do not invent code changes for content work.
+For `/mw-learn`, treat one Lecture or one bounded topic as one Mary Workflow milestone. The command must preserve the normal plan interview, run authorization, execution lease, review, stop/resume, and cycle rules. Use relative local source paths as milestone deliverables; do not invent external ids/URLs, external synchronization results, or code changes for content work.
 
-If the source page already exists, update it in place. If a duplicate was created, move content back, remove the duplicate through the available Notion operation, and repair Course Hub links.
+If the source note already exists, update it in place. If a duplicate local file was created, merge back into the canonical note, remove the duplicate only after confirming no unique content is lost, and repair local Course Hub links.
 
 ## Delivery Checklist
 
-- Course Hub map, ordering, parentage, and Source Index are coherent.
+- Course Hub map, ordering, local parentage, and Source Index are coherent.
 - Slide foundation explicitly used the Slide skill.
-- Raw transcript page is the Lecture child directly after the original PDF.
+- Raw transcript file is linked directly after the original PDF.
 - Terminology, Greek letters, formulas, units, and derivations follow slides.
 - Every recording-only addition has a `🎙` marker; uncertainty has `⚠️存疑`.
 - Summary contains exam points, mistakes, deadlines, and one next action.

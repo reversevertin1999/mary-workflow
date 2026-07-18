@@ -899,6 +899,14 @@ class WorkflowBoundaryTests(unittest.TestCase):
         init_context = render_prompt(fresh, "mw-init")
         self.assertIn("# Mary Init Understanding Phase", init_context)
         self.assertIn("file_104.txt", init_context)
+        self.assertIn(
+            "Local Delivery Contract",
+            (workflow / "prompts/mw-learn.md").read_text(encoding="utf-8"),
+        )
+        self.assertNotIn(
+            "notion",
+            (workflow / "prompts/mw-exam.md").read_text(encoding="utf-8").lower(),
+        )
 
     def test_course_profiles_render_as_shared_mary_context(self) -> None:
         for alias, prompt_name, marker in (
@@ -914,6 +922,33 @@ class WorkflowBoundaryTests(unittest.TestCase):
             self.assertIn(f"Alias: /{alias}", rendered)
             self.assertIn(marker, rendered)
             self.assertIn("Mary Workflow v2.1 Context", rendered)
+
+    def test_course_profiles_have_local_delivery_and_shared_phase_boundaries(self) -> None:
+        profile_files = {
+            "mw-learn": [
+                REPO_ROOT / ".mary-workflow/prompts/mw-learn.md",
+                REPO_ROOT / "commands/mw-learn.md",
+                REPO_ROOT / "skills/lecture-learning/SKILL.md",
+                REPO_ROOT / "skills/slide-to-lecture/SKILL.md",
+            ],
+            "mw-exam": [
+                REPO_ROOT / ".mary-workflow/prompts/mw-exam.md",
+                REPO_ROOT / "commands/mw-exam.md",
+                REPO_ROOT / "skills/exam-review/SKILL.md",
+            ],
+        }
+        for alias, paths in profile_files.items():
+            combined = "\n".join(path.read_text(encoding="utf-8") for path in paths)
+            lowered = combined.lower()
+            self.assertIn("local delivery contract", lowered)
+            self.assertIn(".mary-workflow/", combined)
+            for phase in ("PLANNING", "PLANNED", "EXECUTING", "REVIEWING", "DEBUGGING", "FINISHED"):
+                self.assertIn(f"`{phase}`", combined)
+            for action in ("mark_task_done", "record_error", "set_phase", "update_state"):
+                self.assertIn(action, combined)
+            self.assertNotIn("notion", lowered, msg=f"{alias} must not default to an external note system")
+            self.assertIn("relative local", lowered)
+            self.assertIn("do not silently", lowered)
 
     def test_course_profiles_remain_available_after_finished_cycle(self) -> None:
         self.start_execution()
