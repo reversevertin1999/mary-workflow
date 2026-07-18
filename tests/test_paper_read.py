@@ -358,6 +358,46 @@ class ReadContractTests(unittest.TestCase):
             self.complete({"confirmed_by": "user", "reason": "The user explicitly accepted this risk."})
         self.assertIn("only legal when parse-quality gate is blocked", str(context.exception))
 
+    def test_four_tamper_attempts_are_rejected_and_audited_cumulatively(self) -> None:
+        write_notes(self.workspace, mutate=lambda ledger: ledger.__setitem__("uncertainties", []))
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("uncertainties must be a non-empty array", str(context.exception))
+
+        def mutate_quality(ledger: dict[str, object]) -> None:
+            ledger["parse_quality"]["dimensions"]["text"] = "degraded"  # type: ignore[index]
+
+        write_notes(self.workspace, mutate=mutate_quality)
+        with self.assertRaises(SystemExit) as context:
+            self.complete()
+        self.assertIn("parse_quality must exactly mirror", str(context.exception))
+
+        write_notes(self.workspace)
+        with self.assertRaises(SystemExit) as context:
+            apply_paper_action(
+                self.project,
+                self.paper_id,
+                {
+                    "action": "complete_stage",
+                    "data": {
+                        "stage": "read",
+                        "artifact": "paper-notes.md",
+                        "output_fingerprint": "f" * 64,
+                    },
+                },
+            )
+        self.assertIn("does not match paper-notes.md", str(context.exception))
+
+        write_notes(self.workspace)
+        with self.assertRaises(SystemExit) as context:
+            self.complete({"confirmed_by": "user", "reason": "The user explicitly accepted this risk."})
+        self.assertIn("only legal when parse-quality gate is blocked", str(context.exception))
+
+        state = read_paper_state(self.project, self.paper_id)
+        self.assertEqual(state["stages"]["read"]["status"], "in_progress")
+        self.assertEqual(state["audit"]["action_counts"]["complete_stage"], 0)
+        self.assertEqual(state["audit"]["rejected_actions"], 4)
+
     def test_complete_read_cli_validates_and_finishes(self) -> None:
         write_notes(self.workspace)
         completed = subprocess.run(
