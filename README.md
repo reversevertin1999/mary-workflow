@@ -38,6 +38,8 @@ Mary Workflow 可以用于：
 
 Mary Workflow 不需要安装额外的 Python 依赖。
 
+（补充兼容性验证：后续已参考本机 OpenCode 配置在 OpenCode + DeepSeek 环境中试跑成功，配置为 `model: deepseek/deepseek-v4-pro`、provider `deepseek`、baseURL `https://api.deepseek.com`、`@opencode-ai/plugin` 1.17.7；这属于后续兼容性试跑环境，不是 Mary Workflow 一开始的原生开发环境。）
+
 ### 安装到 Codex
 
 在终端执行：
